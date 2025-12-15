@@ -11,7 +11,7 @@ class OC_Aviv_Pos_Order_Handler {
 
 	public static function init(): void {
 		add_action( 'woocommerce_order_status_changed', [ __CLASS__, 'maybe_send_order' ], 20, 4 );
-	} 
+	}
 
 	public static function maybe_send_order( $order_id, $old_status, $new_status, $order ): void {
 		if ( ! $order instanceof WC_Order ) {

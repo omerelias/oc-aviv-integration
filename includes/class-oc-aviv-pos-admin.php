@@ -7,8 +7,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 /**
  * Admin UI for Aviv POS integration.
  */
-class OC_Aviv_Pos_Admin {
-
+class OC_Aviv_Pos_Admin {  
+ 
 	public static function init(): void {
 		add_action( 'admin_menu', [ __CLASS__, 'add_menu' ] );
 		add_action( 'admin_enqueue_scripts', [ __CLASS__, 'enqueue_assets' ] );
@@ -207,8 +207,7 @@ class OC_Aviv_Pos_Admin {
 			<thead>
 			<tr>
 				<th><?php esc_html_e( 'WooCommerce Gateway', 'oc-aviv-pos' ); ?></th>
-				<th><?php esc_html_e( 'POS paymentType code', 'oc-aviv-pos' ); ?></th>
-				<th><?php esc_html_e( 'Type (PREPAID/POSTPAID)', 'oc-aviv-pos' ); ?></th>
+				<th><?php esc_html_e( 'מצב חיוב', 'oc-aviv-pos' ); ?></th>
 				<th></th>
 			</tr>
 			</thead>
@@ -225,11 +224,10 @@ class OC_Aviv_Pos_Admin {
 							<?php endforeach; ?>
 						</select>
 					</td>
-					<td><input type="text" name="settings[payment_mapping][<?php echo esc_attr( $index ); ?>][pos_code]" value="<?php echo esc_attr( $row['pos_code'] ?? '' ); ?>" placeholder="PREPAID / CASH / BANK_TRANSFER…" /></td>
 					<td>
 						<select name="settings[payment_mapping][<?php echo esc_attr( $index ); ?>][mode]">
-							<option value="PREPAID" <?php selected( $row['mode'] ?? '', 'PREPAID' ); ?>>PREPAID</option>
-							<option value="POSTPAID" <?php selected( $row['mode'] ?? '', 'POSTPAID' ); ?>>POSTPAID</option>
+							<option value="PREPAID" <?php selected( $row['mode'] ?? '', 'PREPAID' ); ?>><?php esc_html_e( 'שולם באתר (מזומן מקוון) - PREPAID', 'oc-aviv-pos' ); ?></option>
+							<option value="POSTPAID" <?php selected( $row['mode'] ?? '', 'POSTPAID' ); ?>><?php esc_html_e( 'אשראי טוקן (ייגבה בקופה/שליח) - POSTPAID', 'oc-aviv-pos' ); ?></option>
 						</select>
 					</td>
 					<td><a href="#" class="button remove-row"><?php esc_html_e( 'Remove', 'oc-aviv-pos' ); ?></a></td>
@@ -237,7 +235,7 @@ class OC_Aviv_Pos_Admin {
 			<?php endforeach; ?>
 			</tbody>
 		</table>
-		<p class="description"><?php esc_html_e( 'מפה כל שיטת תשלום של החנות לקוד התשלום והסוג ב-Aviv POS.', 'oc-aviv-pos' ); ?></p>
+		<p class="description"><?php esc_html_e( 'פשוט: PREPAID = מזומן ששולם באתר (paymentType=CASH). POSTPAID = אשראי טוקן שייגבה בקופה/שליח (paymentType=PREPAID).', 'oc-aviv-pos' ); ?></p>
 		<p><a href="#" class="button add-row"><?php esc_html_e( 'Add mapping', 'oc-aviv-pos' ); ?></a></p>
 		<?php
 	}
@@ -275,13 +273,18 @@ class OC_Aviv_Pos_Admin {
 			$sanitized['payment_mapping'] = [];
 			if ( is_array( $data['payment_mapping'] ) ) {
 				foreach ( $data['payment_mapping'] as $row ) {
-					if ( empty( $row['wc'] ) || empty( $row['pos_code'] ) ) {
+					if ( empty( $row['wc'] ) || empty( $row['mode'] ) ) {
 						continue;
 					}
+					$mode   = in_array( $row['mode'] ?? 'PREPAID', [ 'PREPAID', 'POSTPAID' ], true ) ? $row['mode'] : 'PREPAID';
+
+					// Derive paymentType by mode: PREPAID => CASH (שולם באתר), POSTPAID => PREPAID (אשראי טוקן).
+					$pos_code = ( 'POSTPAID' === $mode ) ? 'PREPAID' : 'CASH';
+
 					$sanitized['payment_mapping'][] = [
 						'wc'       => sanitize_text_field( $row['wc'] ),
-						'pos_code' => sanitize_text_field( $row['pos_code'] ),
-						'mode'     => in_array( $row['mode'] ?? 'PREPAID', [ 'PREPAID', 'POSTPAID' ], true ) ? $row['mode'] : 'PREPAID',
+						'pos_code' => $pos_code,
+						'mode'     => $mode,
 					];
 				}
 			}
