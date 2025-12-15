@@ -161,12 +161,20 @@ class OC_Aviv_Pos_Order_Handler {
 		// Add quantity info from sale units plugin (like "2 יח', 1 קג").
 		$quantity_in_units = $item->get_meta( '_ocwsu_quantity_in_units', true );
 		$unit_weight = $item->get_meta( '_ocwsu_unit_weight', true );
-		$product_weight_units = $item->get_meta( '_ocwsu_product_weight_units', true );
 		$quantity = $item->get_quantity();
 		
 		if ( $quantity_in_units ) {
+			// Get unit_weight from item meta, or fallback to product meta.
+			if ( ! $unit_weight ) {
+				$product_id = $item->get_product_id();
+				$_product = wc_get_product( $product_id );
+				if ( $_product instanceof WC_Product_Variation ) {
+					$product_id = $_product->get_parent_id();
+				}
+				$unit_weight = get_post_meta( $product_id, '_ocwsu_unit_weight', true );
+			}
+			
 			// Calculate total weight: unit_weight × quantity_in_units.
-			// If unit_weight exists, use it; otherwise use quantity (total weight).
 			if ( $unit_weight ) {
 				// unit_weight is stored in kg (based on plugin logic).
 				// Calculate total weight in kg: unit_weight × quantity_in_units.
