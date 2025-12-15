@@ -11,7 +11,7 @@ class OC_Aviv_Pos_Order_Handler {
 
 	public static function init(): void {
 		add_action( 'woocommerce_order_status_changed', [ __CLASS__, 'maybe_send_order' ], 20, 4 );
-	}
+	} 
 
 	public static function maybe_send_order( $order_id, $old_status, $new_status, $order ): void {
 		if ( ! $order instanceof WC_Order ) {
@@ -100,7 +100,7 @@ class OC_Aviv_Pos_Order_Handler {
 			],
 			'deliveryType'     => $order->has_shipping_address() ? 'DELIVERY' : 'PICKUP',
 			'servingType'      => $order->has_shipping_address() ? 'DELIVERY' : 'TAKEAWAY',
-			'address'          => $address,
+			'address'          => $address, 
 			'payments'         => $payments,
 			'takeoutSets'      => 0,
 			'tblNo'            => 0,
@@ -117,6 +117,13 @@ class OC_Aviv_Pos_Order_Handler {
 		$mode          = $settings['comment_mode'] ?? 'variations_and_note';
 
 		$parts = [];
+		$note_keys = [
+			'Note',
+			__( 'Customer notes about the order', 'woocommerce' ),
+			'Customer notes about the order',
+			'הערות לקוח',
+			'הערות לקוח אודות ההזמנה',
+		];
 
 		if ( in_array( $mode, [ 'variations', 'variations_and_note' ], true ) ) {
 			$variation_parts = [];
@@ -124,6 +131,9 @@ class OC_Aviv_Pos_Order_Handler {
 
 			if ( $attributes ) {
 				foreach ( $attributes as $meta ) {
+					if ( in_array( wp_strip_all_tags( $meta->display_key ), $note_keys, true ) ) {
+						continue;
+					}
 					$variation_parts[] = sprintf( '%s%s%s', wp_strip_all_tags( $meta->display_key ), $variation_sep, wp_strip_all_tags( $meta->display_value ) );
 				}
 			}
@@ -141,12 +151,17 @@ class OC_Aviv_Pos_Order_Handler {
 			if ( ! $note ) {
 				$note = $item->get_meta( 'הערות לקוח' );
 			}
+			if ( ! $note ) {
+				$note = $item->get_meta( 'הערות לקוח אודות ההזמנה' );
+			}
 			if ( $note ) {
-				$parts[] = $note;
+				$parts[] = sprintf( '%s%s%s', __( 'הערות לקוח', 'oc-aviv-pos' ), $variation_sep, $note );
 			}
 		}
 
-		return trim( implode( $general_sep, array_filter( $parts ) ) );
+		$parts = array_filter( array_unique( $parts ) );
+
+		return trim( implode( $general_sep, $parts ) );
 	}
 
 	private static function map_payments( WC_Order $order, array $settings ): array {
