@@ -248,7 +248,7 @@ class OC_Aviv_Pos_Order_Handler {
 				$note = $item->get_meta( 'הערות לקוח אודות ההזמנה' );
 			}
 			if ( $note ) {
-				$parts[] = sprintf( '%s%s%s', __( 'הערות לקוח', 'oc-aviv-pos' ), $variation_sep, $note );
+				$parts[] = $note;
 			}
 		}
 
