@@ -267,7 +267,7 @@ class OC_Aviv_Pos_Admin {
 	private static function render_payments_tab( array $settings ): void {
 		$gateways       = WC()->payment_gateways ? WC()->payment_gateways->payment_gateways() : [];
 		$payment_rows   = $settings['payment_mapping'] ?? [];
-		$payment_rows[] = [ 'wc' => '', 'pos_code' => '', 'mode' => 'PREPAID' ]; // template row at end.
+		$payment_rows[] = [ 'wc' => '', 'pos_code' => '', 'mode' => 'CASH' ]; // template row at end.
 		?>
 		<table class="widefat fixed striped oc-aviv-pos-mapping">
 			<thead>
@@ -292,8 +292,8 @@ class OC_Aviv_Pos_Admin {
 					</td>
 					<td>
 						<select name="settings[payment_mapping][<?php echo esc_attr( $index ); ?>][mode]">
-							<option value="PREPAID" <?php selected( $row['mode'] ?? '', 'PREPAID' ); ?>><?php esc_html_e( 'שולם באתר (אשראי טוקן) - PREPAID', 'oc-aviv-pos' ); ?></option>
-							<option value="POSTPAID" <?php selected( $row['mode'] ?? '', 'POSTPAID' ); ?>><?php esc_html_e( 'לא שולם – יחויב בקופה (טוקן אשראי)', 'oc-aviv-pos' ); ?></option>
+							<option value="CASH" <?php selected( $row['mode'] ?? '', 'CASH' ); ?>><?php esc_html_e( 'ישולם באתר', 'oc-aviv-pos' ); ?></option>
+							<option value="PREPAID" <?php selected( $row['mode'] ?? '', 'PREPAID' ); ?>><?php esc_html_e( 'ישולם בקופה', 'oc-aviv-pos' ); ?></option>
 						</select>
 					</td>
 					<td><a href="#" class="button remove-row"><?php esc_html_e( 'Remove', 'oc-aviv-pos' ); ?></a></td>
@@ -301,7 +301,7 @@ class OC_Aviv_Pos_Admin {
 			<?php endforeach; ?>
 			</tbody>
 		</table>
-		<p class="description"><?php esc_html_e( 'PREPAID = שולם באתר, נשלח כ-PREPAID (טוקן אם קיים). POSTPAID = לא שולם, נשלח כ-PREPAID עם טוקן לחיוב בקופה.', 'oc-aviv-pos' ); ?></p>
+		<p class="description"><?php esc_html_e( '"ישולם באתר" = תשלום שכבר נגבה באתר, נשלח כ-CASH ללא טוקן. "ישולם בקופה" = תשלום שייגבה בקופה/שליח עם טוקן אשראי.', 'oc-aviv-pos' ); ?></p>
 		<p><a href="#" class="button add-row"><?php esc_html_e( 'Add mapping', 'oc-aviv-pos' ); ?></a></p>
 		<?php
 	}
@@ -361,10 +361,11 @@ class OC_Aviv_Pos_Admin {
 					if ( empty( $row['wc'] ) || empty( $row['mode'] ) ) {
 						continue;
 					}
-					$mode   = in_array( $row['mode'] ?? 'PREPAID', [ 'PREPAID', 'POSTPAID' ], true ) ? $row['mode'] : 'PREPAID';
+					$mode = in_array( $row['mode'] ?? 'PREPAID', [ 'CASH', 'PREPAID' ], true ) ? $row['mode'] : 'PREPAID';
 
-					// Both modes use PREPAID paymentType; POSTPAID just means charge later with token.
-					$pos_code = 'PREPAID';
+					// CASH = already paid on site, send as CASH payment type
+					// PREPAID = will be charged at POS with token, send as PREPAID payment type
+					$pos_code = $mode === 'CASH' ? 'CASH' : 'PREPAID';
 
 					$sanitized['payment_mapping'][] = [
 						'wc'       => sanitize_text_field( $row['wc'] ),

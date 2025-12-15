@@ -158,19 +158,32 @@ class OC_Aviv_Pos_Order_Handler {
 			'צורת חיתוך',
 		];
 
-		// Add quantity info from sale units plugin (like "1 יח', 1.5 קג").
+		// Add quantity info from sale units plugin (like "2 יח', 1 קג").
 		$quantity_in_units = $item->get_meta( '_ocwsu_quantity_in_units', true );
+		$unit_weight = $item->get_meta( '_ocwsu_unit_weight', true );
+		$product_weight_units = $item->get_meta( '_ocwsu_product_weight_units', true );
 		$quantity = $item->get_quantity();
 		
 		if ( $quantity_in_units ) {
-			// Format: "1 יח', 1.5 קג" (matching admin display).
-			$qty_display = $quantity; 
+			// Calculate total weight: unit_weight × quantity_in_units.
+			// If unit_weight exists, use it; otherwise use quantity (total weight).
+			if ( $unit_weight ) {
+				// unit_weight is stored in kg (based on plugin logic).
+				// Calculate total weight in kg: unit_weight × quantity_in_units.
+				$total_weight = floatval( $unit_weight ) * floatval( $quantity_in_units );
+			} else {
+				// Fallback: use quantity which is already total weight in kg.
+				$total_weight = $quantity;
+			}
+			
+			// Format: "2 יח', 1 קג" (total weight).
+			$qty_display = $total_weight;
 			$qty_suffix = 'קג';
 			if ( $qty_display < 1 ) {
 				$qty_display = $qty_display * 1000;
 				$qty_suffix = 'גרם';
 			}
-			// Format as shown in admin: "1 יח', 1.5 קג"
+			// Format: "2 יח', 1 קג"
 			$parts[] = sprintf( '%s יח\', %s %s', $quantity_in_units, $qty_display, $qty_suffix );
 		} elseif ( $quantity ) {
 			// If no units but has weight quantity, check if product is weighable.
@@ -256,17 +269,29 @@ class OC_Aviv_Pos_Order_Handler {
 			return [];
 		}
 
-		$amount  = (int) round( $order->get_total() * 100 );
-		$prepaid = $mapping['mode'] === 'PREPAID';
-		$token   = $order->get_meta( '_CardcomToken' ) ?: $order->get_meta( '_CardcomTokenId' );
-		$card    = $token ? [ 'token' => $token ] : null;
+		$amount = (int) round( $order->get_total() * 100 );
+		$mode   = $mapping['mode'] ?? 'PREPAID';
+
+		// CASH mode: already paid on site, send as CASH payment type (no card token).
+		if ( $mode === 'CASH' ) {
+			return [
+				[
+					'paymentType' => 'CASH',
+					'amount'      => $amount,
+				],
+			];
+		}
+
+		// PREPAID mode: will be charged at POS with token, send as PREPAID payment type.
+		$token = $order->get_meta( '_CardcomToken' ) ?: $order->get_meta( '_CardcomTokenId' );
+		$card  = $token ? [ 'token' => $token ] : null;
 
 		return [
 			[
-				'paymentType' => 'PREPAID', // both flows use PREPAID; prepaid flag tells if already charged
+				'paymentType' => 'PREPAID',
 				'amount'      => $amount,
 				'card'        => $card,
-				'prepaid'     => $prepaid,
+				'prepaid'     => false, // Will be charged at POS
 			],
 		];
 	}
