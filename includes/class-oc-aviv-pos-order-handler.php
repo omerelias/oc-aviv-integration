@@ -48,7 +48,7 @@ class OC_Aviv_Pos_Order_Handler {
 		}
 	}
 
-	private static function build_payload( WC_Order $order, array $settings ): array {
+	public static function build_payload( WC_Order $order, array $settings ): array {
 		$items = [];
 
 		foreach ( $order->get_items() as $item ) {

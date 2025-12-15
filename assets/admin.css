@@ -7,3 +7,19 @@
 	width: 100%;
 }
 
+.oc-aviv-pos .oc-aviv-debug-panels {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+	gap: 12px;
+	margin-top: 12px;
+}
+
+.oc-aviv-pos .oc-aviv-debug-panels pre {
+	background: #f6f7f7;
+	border: 1px solid #ccd0d4;
+	padding: 8px;
+	min-height: 160px;
+	overflow: auto;
+	white-space: pre-wrap;
+}
+

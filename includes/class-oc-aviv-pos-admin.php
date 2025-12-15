@@ -12,6 +12,7 @@ class OC_Aviv_Pos_Admin {
 	public static function init(): void {
 		add_action( 'admin_menu', [ __CLASS__, 'add_menu' ] );
 		add_action( 'admin_enqueue_scripts', [ __CLASS__, 'enqueue_assets' ] );
+		add_action( 'wp_ajax_oc_aviv_pos_debug', [ __CLASS__, 'ajax_debug_payload' ] );
 	}
 
 	public static function add_menu(): void {
@@ -51,6 +52,7 @@ class OC_Aviv_Pos_Admin {
 			[
 				'addRow'    => __( 'Add mapping', 'oc-aviv-pos' ),
 				'removeRow' => __( 'Remove', 'oc-aviv-pos' ),
+				'loading'   => __( 'Loading…', 'oc-aviv-pos' ),
 			]
 		);
 	}
@@ -165,6 +167,34 @@ class OC_Aviv_Pos_Admin {
 				</td>
 			</tr>
 		</table>
+		<hr />
+		<h2><?php esc_html_e( 'כלי דיבאג להזמנה', 'oc-aviv-pos' ); ?></h2>
+		<p class="description"><?php esc_html_e( 'בחר הזמנה והצג את ה-payload או הבקשה המלאה בלי לשלוח ל-POS.', 'oc-aviv-pos' ); ?></p>
+		<table class="form-table">
+			<tr>
+				<th scope="row"><label for="oc_aviv_debug_order"><?php esc_html_e( 'Order ID', 'oc-aviv-pos' ); ?></label></th>
+				<td>
+					<input type="number" id="oc_aviv_debug_order" min="1" class="regular-text" placeholder="123" />
+					<button type="button" class="button" id="oc_aviv_show_payload"><?php esc_html_e( 'Show payload', 'oc-aviv-pos' ); ?></button>
+					<button type="button" class="button" id="oc_aviv_show_request"><?php esc_html_e( 'Show full request', 'oc-aviv-pos' ); ?></button>
+					<input type="hidden" id="oc_aviv_debug_nonce" value="<?php echo esc_attr( wp_create_nonce( 'oc_aviv_pos_debug' ) ); ?>" />
+					<div class="oc-aviv-debug-panels">
+						<div>
+							<strong><?php esc_html_e( 'Payload', 'oc-aviv-pos' ); ?></strong>
+							<pre id="oc_aviv_debug_payload"></pre>
+						</div>
+						<div>
+							<strong><?php esc_html_e( 'Request', 'oc-aviv-pos' ); ?></strong>
+							<pre id="oc_aviv_debug_request"></pre>
+						</div>
+						<div>
+							<strong><?php esc_html_e( 'Response', 'oc-aviv-pos' ); ?></strong>
+							<pre id="oc_aviv_debug_response"></pre>
+						</div>
+					</div>
+				</td>
+			</tr>
+		</table>
 		<?php
 	}
 
@@ -215,26 +245,45 @@ class OC_Aviv_Pos_Admin {
 	private static function save_settings( array $existing ): array {
 		$data = wp_unslash( $_POST['settings'] ?? [] );
 
-		$sanitized = [
-			'vendor_id'          => isset( $data['vendor_id'] ) ? sanitize_text_field( $data['vendor_id'] ) : '',
-			'account_id'         => isset( $data['account_id'] ) ? sanitize_text_field( $data['account_id'] ) : '',
-			'trigger_statuses'   => array_values( array_filter( array_map( 'sanitize_text_field', $data['trigger_statuses'] ?? [] ) ) ),
-			'comment_mode'       => isset( $data['comment_mode'] ) ? sanitize_text_field( $data['comment_mode'] ) : 'variations_and_note',
-			'general_separator'  => isset( $data['general_separator'] ) ? sanitize_text_field( $data['general_separator'] ) : ' | ',
-			'variation_separator'=> isset( $data['variation_separator'] ) ? sanitize_text_field( $data['variation_separator'] ) : ': ',
-			'payment_mapping'    => [],
-		];
+		// Start with existing settings to avoid wiping fields from other tabs.
+		$sanitized = $existing;
 
-		if ( ! empty( $data['payment_mapping'] ) && is_array( $data['payment_mapping'] ) ) {
-			foreach ( $data['payment_mapping'] as $row ) {
-				if ( empty( $row['wc'] ) || empty( $row['pos_code'] ) ) {
-					continue;
+		// API tab fields.
+		if ( array_key_exists( 'vendor_id', $data ) ) {
+			$sanitized['vendor_id'] = sanitize_text_field( $data['vendor_id'] );
+		}
+		if ( array_key_exists( 'account_id', $data ) ) {
+			$sanitized['account_id'] = sanitize_text_field( $data['account_id'] );
+		}
+		if ( array_key_exists( 'trigger_statuses', $data ) ) {
+			$sanitized['trigger_statuses'] = array_values( array_filter( array_map( 'sanitize_text_field', $data['trigger_statuses'] ?? [] ) ) );
+		}
+
+		// Comment tab fields.
+		if ( array_key_exists( 'comment_mode', $data ) ) {
+			$sanitized['comment_mode'] = sanitize_text_field( $data['comment_mode'] );
+		}
+		if ( array_key_exists( 'general_separator', $data ) ) {
+			$sanitized['general_separator'] = sanitize_text_field( $data['general_separator'] );
+		}
+		if ( array_key_exists( 'variation_separator', $data ) ) {
+			$sanitized['variation_separator'] = sanitize_text_field( $data['variation_separator'] );
+		}
+
+		// Payments tab fields.
+		if ( array_key_exists( 'payment_mapping', $data ) ) {
+			$sanitized['payment_mapping'] = [];
+			if ( is_array( $data['payment_mapping'] ) ) {
+				foreach ( $data['payment_mapping'] as $row ) {
+					if ( empty( $row['wc'] ) || empty( $row['pos_code'] ) ) {
+						continue;
+					}
+					$sanitized['payment_mapping'][] = [
+						'wc'       => sanitize_text_field( $row['wc'] ),
+						'pos_code' => sanitize_text_field( $row['pos_code'] ),
+						'mode'     => in_array( $row['mode'] ?? 'PREPAID', [ 'PREPAID', 'POSTPAID' ], true ) ? $row['mode'] : 'PREPAID',
+					];
 				}
-				$sanitized['payment_mapping'][] = [
-					'wc'       => sanitize_text_field( $row['wc'] ),
-					'pos_code' => sanitize_text_field( $row['pos_code'] ),
-					'mode'     => in_array( $row['mode'] ?? 'PREPAID', [ 'PREPAID', 'POSTPAID' ], true ) ? $row['mode'] : 'PREPAID',
-				];
 			}
 		}
 
@@ -257,6 +306,42 @@ class OC_Aviv_Pos_Admin {
 		$saved = get_option( OC_AVIV_POS_OPTION_KEY, [] );
 
 		return wp_parse_args( $saved, $defaults );
+	}
+
+	public static function ajax_debug_payload(): void {
+		check_ajax_referer( 'oc_aviv_pos_debug', 'nonce' );
+
+		$order_id = isset( $_POST['order_id'] ) ? absint( $_POST['order_id'] ) : 0;
+		if ( ! $order_id ) {
+			wp_send_json_error( [ 'message' => __( 'Order ID is required', 'oc-aviv-pos' ) ], 400 );
+		}
+
+		$order = wc_get_order( $order_id );
+		if ( ! $order ) {
+			wp_send_json_error( [ 'message' => __( 'Order not found', 'oc-aviv-pos' ) ], 404 );
+		}
+
+		$settings = self::get_settings();
+		if ( empty( $settings['vendor_id'] ) || empty( $settings['account_id'] ) ) {
+			wp_send_json_error( [ 'message' => __( 'Vendor ID or Account ID missing in settings', 'oc-aviv-pos' ) ], 400 );
+		}
+
+		$payload   = OC_Aviv_Pos_Order_Handler::build_payload( $order, $settings );
+		$endpoint  = rtrim( apply_filters( 'oc_aviv_pos_base_url', 'http://test.aviv-pos.co.il/api/avivrd' ), '/' );
+		$url       = sprintf( '%s/orders/place/%s/%s', $endpoint, rawurlencode( $settings['vendor_id'] ), rawurlencode( $settings['account_id'] ) );
+		$request   = [
+			'method'  => 'POST',
+			'url'     => $url,
+			'headers' => [ 'Content-Type' => 'application/json' ],
+			'body'    => $payload,
+		];
+
+		wp_send_json_success(
+			[
+				'payload' => $payload,
+				'request' => $request,
+			]
+		);
 	}
 }
 
