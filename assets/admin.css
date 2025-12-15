@@ -1,0 +1,9 @@
+.oc-aviv-pos .form-table th {
+	width: 240px;
+}
+
+.oc-aviv-pos .oc-aviv-pos-mapping td input,
+.oc-aviv-pos .oc-aviv-pos-mapping td select {
+	width: 100%;
+}
+
