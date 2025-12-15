@@ -44,7 +44,10 @@ class OC_Aviv_Pos_Order_Handler {
 			$logger->error( 'Failed sending order to Aviv POS: ' . $result->get_error_message(), $ctx );
 		} else {
 			$logger->info( 'Order sent to Aviv POS successfully', $ctx );
+			$order->update_meta_data( '_oc_aviv_pos_sent', 'yes' );
+			$order->update_meta_data( '_oc_aviv_pos_sent_at', current_time( 'mysql' ) );
 			$order->add_order_note( __( 'נשלחה הזמנה ל-Aviv POS.', 'oc-aviv-pos' ) );
+			$order->save();
 		}
 	}
 
@@ -95,6 +98,7 @@ class OC_Aviv_Pos_Order_Handler {
 		$delivery_mode = self::get_delivery_mode( $order );
 		$delivery_type = $delivery_mode === 'pickup' ? 'PICKUP' : 'DELIVERY';
 		$serving_type  = $delivery_mode === 'pickup' ? 'PICKUP' : 'DELIVERY';
+		$webhook_url   = $settings['webhook_url'] ?? '';
 
 		return [
 			'shareToken'        => (string) $order->get_order_number(),
@@ -117,8 +121,8 @@ class OC_Aviv_Pos_Order_Handler {
 			'payments'          => $payments,
 			'takeoutSets'       => 0,
 			'tblNo'             => 0,
-			'webhook'           => '',
-			'checkoutWebhook'   => '',
+			'webhook'           => $webhook_url,
+			'checkoutWebhook'   => $webhook_url, // Use same webhook for checkout if provided
 			'deliveryCharge'    => (int) round( $order->get_shipping_total() * 100 ),
 			'tip'               => 0,
 		];

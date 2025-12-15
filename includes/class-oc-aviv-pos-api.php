@@ -15,11 +15,16 @@ class OC_Aviv_Pos_API {
 	 * @param array $payload
 	 * @param string $vendor
 	 * @param string $account
+	 * @param string|null $base_url Optional base URL. If not provided, will use settings or default.
 	 *
 	 * @return array|\WP_Error
 	 */
-	public static function send_order( array $payload, string $vendor, string $account ) {
-		$endpoint = rtrim( apply_filters( 'oc_aviv_pos_base_url', 'http://test.aviv-pos.co.il/api/avivrd' ), '/' );
+	public static function send_order( array $payload, string $vendor, string $account, ?string $base_url = null ) {
+		if ( null === $base_url ) {
+			$settings = OC_Aviv_Pos_Admin::get_settings();
+			$base_url = $settings['base_url'] ?? 'http://test.aviv-pos.co.il/api/avivrd';
+		}
+		$endpoint = rtrim( apply_filters( 'oc_aviv_pos_base_url', $base_url ), '/' );
 		$url      = sprintf( '%s/orders/place/%s/%s', $endpoint, rawurlencode( $vendor ), rawurlencode( $account ) );
 		$args = [
 			'headers' => [
