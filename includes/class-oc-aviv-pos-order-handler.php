@@ -158,7 +158,7 @@ class OC_Aviv_Pos_Order_Handler {
 			'צורת חיתוך',
 		];
 
-		// Add quantity info from sale units plugin (like "2 יח', 500 גרם").
+		// Add quantity info from sale units plugin (like "2 יח, 500 גרם").
 		$quantity_in_units = $item->get_meta( '_ocwsu_quantity_in_units', true );
 		$unit_weight = $item->get_meta( '_ocwsu_unit_weight', true );
 		$quantity = $item->get_quantity();
@@ -183,11 +183,11 @@ class OC_Aviv_Pos_Order_Handler {
 					$qty_display = $qty_display * 1000;
 					$qty_suffix = 'גרם';
 				}
-				// Format: "2 יח', 500 גרם" (unit weight as-is)
-				$parts[] = sprintf( '%s יח\', %s %s', $quantity_in_units, $qty_display, $qty_suffix );
+				// Format: "2 יח, 500 גרם" (unit weight as-is)
+				$parts[] = sprintf( '%s יח, %s %s', $quantity_in_units, $qty_display, $qty_suffix );
 			} else {
 				// Fallback: just show units without weight.
-				$parts[] = sprintf( '%s יח\'', $quantity_in_units );
+				$parts[] = sprintf( '%s יח', $quantity_in_units );
 			}
 		} elseif ( $quantity ) {
 			// If no units but has weight quantity, check if product is weighable.
