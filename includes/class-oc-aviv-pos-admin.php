@@ -13,6 +13,7 @@ class OC_Aviv_Pos_Admin {
 		add_action( 'admin_menu', [ __CLASS__, 'add_menu' ] );
 		add_action( 'admin_enqueue_scripts', [ __CLASS__, 'enqueue_assets' ] );
 		add_action( 'wp_ajax_oc_aviv_pos_debug', [ __CLASS__, 'ajax_debug_payload' ] );
+		add_action( 'wp_ajax_oc_aviv_pos_send_order', [ __CLASS__, 'ajax_send_order' ] );
 	}
 
 	public static function add_menu(): void {
@@ -177,7 +178,9 @@ class OC_Aviv_Pos_Admin {
 					<input type="number" id="oc_aviv_debug_order" min="1" class="regular-text" placeholder="123" />
 					<button type="button" class="button" id="oc_aviv_show_payload"><?php esc_html_e( 'Show payload', 'oc-aviv-pos' ); ?></button>
 					<button type="button" class="button" id="oc_aviv_show_request"><?php esc_html_e( 'Show full request', 'oc-aviv-pos' ); ?></button>
+					<button type="button" class="button button-primary" id="oc_aviv_send_order"><?php esc_html_e( 'Send Order', 'oc-aviv-pos' ); ?></button>
 					<input type="hidden" id="oc_aviv_debug_nonce" value="<?php echo esc_attr( wp_create_nonce( 'oc_aviv_pos_debug' ) ); ?>" />
+					<input type="hidden" id="oc_aviv_send_nonce" value="<?php echo esc_attr( wp_create_nonce( 'oc_aviv_pos_send_order' ) ); ?>" />
 					<div class="oc-aviv-debug-panels">
 						<div>
 							<strong><?php esc_html_e( 'Payload', 'oc-aviv-pos' ); ?></strong>
@@ -343,6 +346,54 @@ class OC_Aviv_Pos_Admin {
 			[
 				'payload' => $payload,
 				'request' => $request,
+			]
+		);
+	}
+
+	public static function ajax_send_order(): void {
+		check_ajax_referer( 'oc_aviv_pos_send_order', 'nonce' );
+
+		$order_id = isset( $_POST['order_id'] ) ? absint( $_POST['order_id'] ) : 0;
+		if ( ! $order_id ) {
+			wp_send_json_error( [ 'message' => __( 'Order ID is required', 'oc-aviv-pos' ) ], 400 );
+		}
+
+		$order = wc_get_order( $order_id );
+		if ( ! $order ) {
+			wp_send_json_error( [ 'message' => __( 'Order not found', 'oc-aviv-pos' ) ], 404 );
+		}
+
+		$settings = self::get_settings();
+		if ( empty( $settings['vendor_id'] ) || empty( $settings['account_id'] ) ) {
+			wp_send_json_error( [ 'message' => __( 'Vendor ID or Account ID missing in settings', 'oc-aviv-pos' ) ], 400 );
+		}
+
+		$payload = OC_Aviv_Pos_Order_Handler::build_payload( $order, $settings );
+		$result  = OC_Aviv_Pos_API::send_order( $payload, $settings['vendor_id'], $settings['account_id'] );
+
+		$logger = wc_get_logger();
+		$ctx    = [ 'source' => 'oc-aviv-pos', 'order_id' => $order->get_id() ];
+
+		if ( is_wp_error( $result ) ) {
+			$logger->error( 'Failed sending order to Aviv POS (manual): ' . $result->get_error_message(), $ctx );
+			wp_send_json_error(
+				[
+					'message' => $result->get_error_message(),
+					'payload' => $payload,
+					'response' => null,
+				],
+				500
+			);
+		}
+
+		$logger->info( 'Order sent to Aviv POS successfully (manual)', $ctx );
+		$order->add_order_note( __( 'נשלחה הזמנה ל-Aviv POS (ידנית מדיבאג).', 'oc-aviv-pos' ) );
+
+		wp_send_json_success(
+			[
+				'message' => __( 'Order sent successfully', 'oc-aviv-pos' ),
+				'payload' => $payload,
+				'response' => $result,
 			]
 		);
 	}

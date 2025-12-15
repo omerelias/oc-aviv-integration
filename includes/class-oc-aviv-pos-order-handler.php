@@ -70,26 +70,26 @@ class OC_Aviv_Pos_Order_Handler {
 		$payments = self::map_payments( $order, $settings );
 
 		// Parse coordinates from billing_address_coords if available (format: "(lat, lng)").
-		$coords_str = $order->get_meta( 'billing_address_coords' );
+		$coords_str = $order->get_meta( '_billing_address_coords' );
 		$lat = '';
 		$lng = '';
 		if ( $coords_str && preg_match( '/\(([\d.]+),\s*([\d.]+)\)/', $coords_str, $matches ) ) {
 			$lat = $matches[1];
-			$lng = $matches[2]; 
+			$lng = $matches[2];
 		}
 
 		$address = [
-			'country'     => $order->get_billing_country() ?: $order->get_meta( 'billing_country' ),
-			'city'        => $order->get_meta( 'billing_city_name' ) ?: $order->get_meta( 'billing_city' ) ?: $order->get_billing_city(),
-			'street'      => $order->get_meta( 'billing_street' ) ?: $order->get_billing_address_1(),
-			'number'      => $order->get_meta( 'billing_house_num' ) ?: $order->get_billing_address_2(),
-			'apt'         => $order->get_meta( 'billing_apartment' ) ?: '',
-			'floor'       => $order->get_meta( 'billing_floor' ) ?: '',
-			'entrance'    => $order->get_meta( 'billing_enter_code' ) ?: '',
+			'country'     => $order->get_billing_country() ?: $order->get_meta( '_billing_country' ),
+			'city'        => $order->get_meta( '_billing_city_name' ) ?: $order->get_meta( '_billing_city' ) ?: $order->get_billing_city(),
+			'street'      => $order->get_meta( '_billing_street' ) ?: $order->get_billing_address_1(),
+			'number'      => $order->get_meta( '_billing_house_num' ) ?: $order->get_billing_address_2(),
+			'apt'         => $order->get_meta( '_billing_apartment' ) ?: '',
+			'floor'       => $order->get_meta( '_billing_floor' ) ?: '',
+			'entrance'    => $order->get_meta( '_billing_enter_code' ) ?: '',
 			'comment'     => $order->get_customer_note(),
 			'lat'         => $lat,
 			'lng'         => $lng,
-			'postalCode'  => $order->get_billing_postcode() ?: $order->get_meta( 'billing_postcode' ),
+			'postalCode'  => $order->get_billing_postcode() ?: $order->get_meta( '_billing_postcode' ),
 		];
 
 		$delivery_mode = self::get_delivery_mode( $order );
@@ -195,7 +195,7 @@ class OC_Aviv_Pos_Order_Handler {
 
 		$amount  = (int) round( $order->get_total() * 100 );
 		$prepaid = $mapping['mode'] === 'PREPAID';
-		$token   = $order->get_meta( 'CardcomToken' ) ?: $order->get_meta( 'CardcomTokenId' );
+		$token   = $order->get_meta( '_CardcomToken' ) ?: $order->get_meta( '_CardcomTokenId' );
 		$card    = $token ? [ 'token' => $token ] : null;
 
 		return [
@@ -212,8 +212,8 @@ class OC_Aviv_Pos_Order_Handler {
 	 * Build delivery date-time from shipping meta if available.
 	 */
 	private static function build_delivery_datetime( WC_Order $order ): string {
-		$date_sortable = $order->get_meta( 'ocws_shipping_info_date_sortable' ); // e.g. 2025/12/16
-		$slot_start    = $order->get_meta( 'ocws_shipping_info_slot_start' );    // e.g. 12:00
+		$date_sortable = $order->get_meta( '_ocws_shipping_info_date_sortable' ) ?: $order->get_meta( 'ocws_shipping_info_date_sortable' ); // e.g. 2025/12/16
+		$slot_start    = $order->get_meta( '_ocws_shipping_info_slot_start' ) ?: $order->get_meta( 'ocws_shipping_info_slot_start' );    // e.g. 12:00
 
 		if ( $date_sortable ) {
 			$date_sortable = str_replace( '/', '-', $date_sortable );
