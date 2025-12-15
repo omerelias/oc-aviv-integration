@@ -69,19 +69,32 @@ class OC_Aviv_Pos_Order_Handler {
 
 		$payments = self::map_payments( $order, $settings );
 
+		// Parse coordinates from billing_address_coords if available (format: "(lat, lng)").
+		$coords_str = $order->get_meta( 'billing_address_coords' );
+		$lat = '';
+		$lng = '';
+		if ( $coords_str && preg_match( '/\(([\d.]+),\s*([\d.]+)\)/', $coords_str, $matches ) ) {
+			$lat = $matches[1];
+			$lng = $matches[2]; 
+		}
+
 		$address = [
-			'country'     => $order->get_billing_country(),
-			'city'        => $order->get_billing_city(),
-			'street'      => $order->get_billing_address_1(),
-			'number'      => $order->get_billing_address_2(),
-			'apt'         => '',
-			'floor'       => '',
-			'entrance'    => '',
+			'country'     => $order->get_billing_country() ?: $order->get_meta( 'billing_country' ),
+			'city'        => $order->get_meta( 'billing_city_name' ) ?: $order->get_meta( 'billing_city' ) ?: $order->get_billing_city(),
+			'street'      => $order->get_meta( 'billing_street' ) ?: $order->get_billing_address_1(),
+			'number'      => $order->get_meta( 'billing_house_num' ) ?: $order->get_billing_address_2(),
+			'apt'         => $order->get_meta( 'billing_apartment' ) ?: '',
+			'floor'       => $order->get_meta( 'billing_floor' ) ?: '',
+			'entrance'    => $order->get_meta( 'billing_enter_code' ) ?: '',
 			'comment'     => $order->get_customer_note(),
-			'lat'         => '',
-			'lng'         => '',
-			'postalCode'  => $order->get_billing_postcode(),
+			'lat'         => $lat,
+			'lng'         => $lng,
+			'postalCode'  => $order->get_billing_postcode() ?: $order->get_meta( 'billing_postcode' ),
 		];
+
+		$delivery_mode = self::get_delivery_mode( $order );
+		$delivery_type = $delivery_mode === 'pickup' ? 'PICKUP' : 'DELIVERY';
+		$serving_type  = $delivery_mode === 'pickup' ? 'PICKUP' : 'DELIVERY';
 
 		return [
 			'shareToken'        => (string) $order->get_order_number(),
@@ -98,8 +111,8 @@ class OC_Aviv_Pos_Order_Handler {
 				'phone'     => $order->get_billing_phone(),
 				'fax'       => '',
 			],
-			'deliveryType'      => $order->has_shipping_address() ? 'DELIVERY' : 'PICKUP',
-			'servingType'       => $order->has_shipping_address() ? 'DELIVERY' : 'TAKEAWAY',
+			'deliveryType'      => $delivery_type,
+			'servingType'       => $serving_type,
 			'address'           => $address, 
 			'payments'          => $payments,
 			'takeoutSets'       => 0,
@@ -218,6 +231,27 @@ class OC_Aviv_Pos_Order_Handler {
 		}
 
 		return current_time( 'c' );
+	}
+
+	/**
+	 * Decide delivery/pickup by shipping method id.
+	 */
+	private static function get_delivery_mode( WC_Order $order ): string {
+		$shipping_items = $order->get_items( 'shipping' );
+		foreach ( $shipping_items as $item ) {
+			$method_id = $item->get_method_id();
+			if ( strpos( $method_id, 'oc_woo_local_pickup_method' ) !== false ) {
+				return 'pickup';
+			}
+			if ( strpos( $method_id, 'oc_woo_advanced_shipping_method' ) !== false ) {
+				return 'delivery';
+			}
+		}
+		// Fallback: if no shipping item, use address presence.
+		if ( $order->has_shipping_address() ) {
+			return 'delivery';
+		}
+		return 'pickup';
 	}
 }
 
