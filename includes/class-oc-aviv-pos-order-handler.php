@@ -158,7 +158,7 @@ class OC_Aviv_Pos_Order_Handler {
 			'צורת חיתוך',
 		];
 
-		// Add quantity info from sale units plugin (like "2 יח', 1 קג").
+		// Add quantity info from sale units plugin (like "2 יח', 500 גרם").
 		$quantity_in_units = $item->get_meta( '_ocwsu_quantity_in_units', true );
 		$unit_weight = $item->get_meta( '_ocwsu_unit_weight', true );
 		$quantity = $item->get_quantity();
@@ -174,25 +174,21 @@ class OC_Aviv_Pos_Order_Handler {
 				$unit_weight = get_post_meta( $product_id, '_ocwsu_unit_weight', true );
 			}
 			
-			// Calculate total weight: unit_weight × quantity_in_units.
+			// Display unit_weight as-is (no calculation).
 			if ( $unit_weight ) {
-				// unit_weight is stored in kg (based on plugin logic).
-				// Calculate total weight in kg: unit_weight × quantity_in_units.
-				$total_weight = floatval( $unit_weight ) * floatval( $quantity_in_units );
+				// unit_weight is stored in kg. Display it directly.
+				$qty_display = floatval( $unit_weight );
+				$qty_suffix = 'קג';
+				if ( $qty_display < 1 ) {
+					$qty_display = $qty_display * 1000;
+					$qty_suffix = 'גרם';
+				}
+				// Format: "2 יח', 500 גרם" (unit weight as-is)
+				$parts[] = sprintf( '%s יח\', %s %s', $quantity_in_units, $qty_display, $qty_suffix );
 			} else {
-				// Fallback: use quantity which is already total weight in kg.
-				$total_weight = $quantity;
+				// Fallback: just show units without weight.
+				$parts[] = sprintf( '%s יח\'', $quantity_in_units );
 			}
-			
-			// Format: "2 יח', 1 קג" (total weight).
-			$qty_display = $total_weight;
-			$qty_suffix = 'קג';
-			if ( $qty_display < 1 ) {
-				$qty_display = $qty_display * 1000;
-				$qty_suffix = 'גרם';
-			}
-			// Format: "2 יח', 1 קג"
-			$parts[] = sprintf( '%s יח\', %s %s', $quantity_in_units, $qty_display, $qty_suffix );
 		} elseif ( $quantity ) {
 			// If no units but has weight quantity, check if product is weighable.
 			$product_id = $item->get_product_id();
