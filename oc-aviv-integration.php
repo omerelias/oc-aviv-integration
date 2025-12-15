@@ -2,7 +2,7 @@
 /**
  * Plugin Name: OC Aviv POS Integration
  * Description: Sends WooCommerce orders to Aviv POS. V1: one-way order creation on selected statuses.
- * Author: OpenCode
+ * Author: Original Concepts
  * Version: 0.1.0
  */
 

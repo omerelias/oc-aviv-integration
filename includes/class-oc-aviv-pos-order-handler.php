@@ -50,7 +50,7 @@ class OC_Aviv_Pos_Order_Handler {
 			$order->save();
 		}
 	}
-  
+
 	public static function build_payload( WC_Order $order, array $settings ): array {
 		$items = [];
 
@@ -72,8 +72,8 @@ class OC_Aviv_Pos_Order_Handler {
 				'itemType'      => 'PRODUCT',
 				'variations'    => [], // not used in V1; we flatten to comment.
 				'comment'       => self::build_item_comment( $item, $settings ),
-				'count'         => (int) $item->get_quantity(),
-				'orderedCount'  => (int) $item->get_quantity(),
+				'count'         => $item->get_quantity(),
+				'orderedCount'  => $item->get_quantity(), 
 			];
 		}
 
