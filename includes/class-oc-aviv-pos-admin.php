@@ -8,7 +8,7 @@ if ( ! defined( 'ABSPATH' ) ) {
  * Admin UI for Aviv POS integration.
  */
 class OC_Aviv_Pos_Admin {  
- 
+
 	public static function init(): void {
 		add_action( 'admin_menu', [ __CLASS__, 'add_menu' ] );
 		add_action( 'admin_enqueue_scripts', [ __CLASS__, 'enqueue_assets' ] );
@@ -226,8 +226,8 @@ class OC_Aviv_Pos_Admin {
 					</td>
 					<td>
 						<select name="settings[payment_mapping][<?php echo esc_attr( $index ); ?>][mode]">
-							<option value="PREPAID" <?php selected( $row['mode'] ?? '', 'PREPAID' ); ?>><?php esc_html_e( 'שולם באתר (מזומן מקוון) - PREPAID', 'oc-aviv-pos' ); ?></option>
-							<option value="POSTPAID" <?php selected( $row['mode'] ?? '', 'POSTPAID' ); ?>><?php esc_html_e( 'אשראי טוקן (ייגבה בקופה/שליח) - POSTPAID', 'oc-aviv-pos' ); ?></option>
+							<option value="PREPAID" <?php selected( $row['mode'] ?? '', 'PREPAID' ); ?>><?php esc_html_e( 'שולם באתר (אשראי טוקן) - PREPAID', 'oc-aviv-pos' ); ?></option>
+							<option value="POSTPAID" <?php selected( $row['mode'] ?? '', 'POSTPAID' ); ?>><?php esc_html_e( 'לא שולם – יחויב בקופה (טוקן אשראי)', 'oc-aviv-pos' ); ?></option>
 						</select>
 					</td>
 					<td><a href="#" class="button remove-row"><?php esc_html_e( 'Remove', 'oc-aviv-pos' ); ?></a></td>
@@ -235,7 +235,7 @@ class OC_Aviv_Pos_Admin {
 			<?php endforeach; ?>
 			</tbody>
 		</table>
-		<p class="description"><?php esc_html_e( 'פשוט: PREPAID = מזומן ששולם באתר (paymentType=CASH). POSTPAID = אשראי טוקן שייגבה בקופה/שליח (paymentType=PREPAID).', 'oc-aviv-pos' ); ?></p>
+		<p class="description"><?php esc_html_e( 'PREPAID = שולם באתר, נשלח כ-PREPAID (טוקן אם קיים). POSTPAID = לא שולם, נשלח כ-PREPAID עם טוקן לחיוב בקופה.', 'oc-aviv-pos' ); ?></p>
 		<p><a href="#" class="button add-row"><?php esc_html_e( 'Add mapping', 'oc-aviv-pos' ); ?></a></p>
 		<?php
 	}
@@ -278,8 +278,8 @@ class OC_Aviv_Pos_Admin {
 					}
 					$mode   = in_array( $row['mode'] ?? 'PREPAID', [ 'PREPAID', 'POSTPAID' ], true ) ? $row['mode'] : 'PREPAID';
 
-					// Derive paymentType by mode: PREPAID => CASH (שולם באתר), POSTPAID => PREPAID (אשראי טוקן).
-					$pos_code = ( 'POSTPAID' === $mode ) ? 'PREPAID' : 'CASH';
+					// Both modes use PREPAID paymentType; POSTPAID just means charge later with token.
+					$pos_code = 'PREPAID';
 
 					$sanitized['payment_mapping'][] = [
 						'wc'       => sanitize_text_field( $row['wc'] ),

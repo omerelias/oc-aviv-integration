@@ -84,30 +84,30 @@ class OC_Aviv_Pos_Order_Handler {
 		];
 
 		return [
-			'shareToken'       => (string) $order->get_order_number(),
-			'items'            => $items,
-			'charges'          => [],
-			'comment'          => '',
-			'formatCreatedDate'=> current_time( 'c' ),
-			'formatDeliveryDate'=> current_time( 'c' ),
-			'status'           => 'OPEN',
-			'contact'          => [
+			'shareToken'        => (string) $order->get_order_number(),
+			'items'             => $items,
+			'charges'           => [],
+			'comment'           => '',
+			'formatCreatedDate' => current_time( 'c' ),
+			'formatDeliveryDate'=> self::build_delivery_datetime( $order ),
+			'status'            => 'OPEN',
+			'contact'           => [
 				'firstName' => $order->get_billing_first_name(),
 				'lastName'  => $order->get_billing_last_name(),
 				'email'     => $order->get_billing_email(),
 				'phone'     => $order->get_billing_phone(),
 				'fax'       => '',
 			],
-			'deliveryType'     => $order->has_shipping_address() ? 'DELIVERY' : 'PICKUP',
-			'servingType'      => $order->has_shipping_address() ? 'DELIVERY' : 'TAKEAWAY',
-			'address'          => $address, 
-			'payments'         => $payments,
-			'takeoutSets'      => 0,
-			'tblNo'            => 0,
-			'webhook'          => '',
-			'checkoutWebhook'  => '',
-			'deliveryCharge'   => (int) round( $order->get_shipping_total() * 100 ),
-			'tip'              => 0,
+			'deliveryType'      => $order->has_shipping_address() ? 'DELIVERY' : 'PICKUP',
+			'servingType'       => $order->has_shipping_address() ? 'DELIVERY' : 'TAKEAWAY',
+			'address'           => $address, 
+			'payments'          => $payments,
+			'takeoutSets'       => 0,
+			'tblNo'             => 0,
+			'webhook'           => '',
+			'checkoutWebhook'   => '',
+			'deliveryCharge'    => (int) round( $order->get_shipping_total() * 100 ),
+			'tip'               => 0,
 		];
 	}
 
@@ -180,16 +180,44 @@ class OC_Aviv_Pos_Order_Handler {
 			return [];
 		}
 
-		$amount = (int) round( $order->get_total() * 100 );
+		$amount  = (int) round( $order->get_total() * 100 );
+		$prepaid = $mapping['mode'] === 'PREPAID';
+		$token   = $order->get_meta( 'CardcomToken' ) ?: $order->get_meta( 'CardcomTokenId' );
+		$card    = $token ? [ 'token' => $token ] : null;
 
 		return [
 			[
-				'paymentType' => $mapping['pos_code'],
+				'paymentType' => 'PREPAID', // both flows use PREPAID; prepaid flag tells if already charged
 				'amount'      => $amount,
-				'card'        => null,
-				'prepaid'     => $mapping['mode'] === 'PREPAID',
+				'card'        => $card,
+				'prepaid'     => $prepaid,
 			],
 		];
+	}
+
+	/**
+	 * Build delivery date-time from shipping meta if available.
+	 */
+	private static function build_delivery_datetime( WC_Order $order ): string {
+		$date_sortable = $order->get_meta( 'ocws_shipping_info_date_sortable' ); // e.g. 2025/12/16
+		$slot_start    = $order->get_meta( 'ocws_shipping_info_slot_start' );    // e.g. 12:00
+
+		if ( $date_sortable ) {
+			$date_sortable = str_replace( '/', '-', $date_sortable );
+		}
+
+		$dt = null;
+		if ( $date_sortable && $slot_start ) {
+			$dt = date_create_immutable( $date_sortable . ' ' . $slot_start, wp_timezone() );
+		} elseif ( $date_sortable ) {
+			$dt = date_create_immutable( $date_sortable . ' 00:00', wp_timezone() );
+		}
+
+		if ( $dt ) {
+			return $dt->format( DateTime::ATOM );
+		}
+
+		return current_time( 'c' );
 	}
 }
 
