@@ -248,8 +248,8 @@ class OC_Aviv_Pos_Order_Handler {
 				$note = $item->get_meta( 'הערות לקוח אודות ההזמנה' );
 			}
 			if ( $note ) {
-				// Remove apostrophe from "צ'יפוטלה" -> "ציפוטלה"
-				$note = str_replace( "צ'יפוטלה", 'ציפוטלה', $note );
+				// Remove all apostrophes (both ' and ') from the note
+				$note = str_replace( [ "'", "'" ], '', $note );
 				$parts[] = $note;
 			}
 		}
