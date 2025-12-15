@@ -73,7 +73,7 @@ class OC_Aviv_Pos_Admin {
 
 		$tabs = [
 			'api'      => __( 'חיבור API וטריגרים', 'oc-aviv-pos' ),
-			'comment'  => __( 'יצירת הזמנה בקופה', 'oc-aviv-pos' ),
+			'comment'  => __( 'מיפויים', 'oc-aviv-pos' ),
 			'payments' => __( 'מיפוי תשלומים', 'oc-aviv-pos' ),
 		];
 
@@ -144,6 +144,7 @@ class OC_Aviv_Pos_Admin {
 	private static function render_comment_tab( array $settings ): void {
 		$comment_mode = $settings['comment_mode'] ?? 'variations_and_note';
 		?>
+		<h2><?php esc_html_e( 'מבנה הערת פריט', 'oc-aviv-pos' ); ?></h2>
 		<table class="form-table">
 			<tr>
 				<th scope="row"><?php esc_html_e( 'מבנה הערת פריט (comment)', 'oc-aviv-pos' ); ?></th>
@@ -167,6 +168,55 @@ class OC_Aviv_Pos_Admin {
 					<input name="settings[variation_separator]" id="variation_separator" type="text" class="regular-text" value="<?php echo esc_attr( $settings['variation_separator'] ?? ': ' ); ?>" placeholder=": " />
 				</td>
 			</tr>
+		</table>
+		<hr />
+		<h2><?php esc_html_e( 'סיווג משלוח', 'oc-aviv-pos' ); ?></h2>
+		<p class="description"><?php esc_html_e( 'סווג כל שיטת משלוח כמשלוח או איסוף. אם לא מוגדר, ייעשה שימוש בלוגיקה אוטומטית לפי שם השיטה.', 'oc-aviv-pos' ); ?></p>
+		<?php
+		$shipping_methods = self::get_all_shipping_methods();
+		$shipping_mapping = $settings['shipping_mapping'] ?? [];
+		?>
+		<table class="widefat fixed striped oc-aviv-pos-shipping-mapping">
+			<thead>
+			<tr>
+				<th><?php esc_html_e( 'שיטת משלוח', 'oc-aviv-pos' ); ?></th>
+				<th><?php esc_html_e( 'סוג', 'oc-aviv-pos' ); ?></th>
+			</tr>
+			</thead>
+			<tbody>
+			<?php if ( empty( $shipping_methods ) ) : ?>
+				<tr>
+					<td colspan="2"><?php esc_html_e( 'לא נמצאו שיטות משלוח', 'oc-aviv-pos' ); ?></td>
+				</tr>
+			<?php else : ?>
+				<?php foreach ( $shipping_methods as $method_key => $method_data ) : ?>
+					<?php
+					$current_type = $shipping_mapping[ $method_key ] ?? '';
+					// Auto-detect default: if method_id contains pickup -> pickup, if contains advanced_shipping -> delivery
+					if ( empty( $current_type ) ) {
+						if ( strpos( $method_data['method_id'], 'local_pickup' ) !== false || strpos( $method_data['method_id'], 'oc_woo_local_pickup_method' ) !== false ) {
+							$current_type = 'pickup';
+						} elseif ( strpos( $method_data['method_id'], 'oc_woo_advanced_shipping_method' ) !== false ) {
+							$current_type = 'delivery';
+						}
+					}
+					?>
+					<tr>
+						<td>
+							<strong><?php echo esc_html( $method_data['title'] ); ?></strong><br />
+							<small style="color: #666;"><?php echo esc_html( $method_key ); ?></small>
+						</td>
+						<td>
+							<select name="settings[shipping_mapping][<?php echo esc_attr( $method_key ); ?>]">
+								<option value=""><?php esc_html_e( 'אוטומטי (לפי שם השיטה)', 'oc-aviv-pos' ); ?></option>
+								<option value="delivery" <?php selected( $current_type, 'delivery' ); ?>><?php esc_html_e( 'משלוח', 'oc-aviv-pos' ); ?></option>
+								<option value="pickup" <?php selected( $current_type, 'pickup' ); ?>><?php esc_html_e( 'איסוף', 'oc-aviv-pos' ); ?></option>
+							</select>
+						</td>
+					</tr>
+				<?php endforeach; ?>
+			<?php endif; ?>
+			</tbody>
 		</table>
 		<hr />
 		<h2><?php esc_html_e( 'כלי דיבאג להזמנה', 'oc-aviv-pos' ); ?></h2>
@@ -260,7 +310,7 @@ class OC_Aviv_Pos_Admin {
 			$sanitized['trigger_statuses'] = array_values( array_filter( array_map( 'sanitize_text_field', $data['trigger_statuses'] ?? [] ) ) );
 		}
 
-		// Comment tab fields.
+		// Comment/Mappings tab fields.
 		if ( array_key_exists( 'comment_mode', $data ) ) {
 			$sanitized['comment_mode'] = sanitize_text_field( $data['comment_mode'] );
 		}
@@ -269,6 +319,19 @@ class OC_Aviv_Pos_Admin {
 		}
 		if ( array_key_exists( 'variation_separator', $data ) ) {
 			$sanitized['variation_separator'] = sanitize_text_field( $data['variation_separator'] );
+		}
+		if ( array_key_exists( 'shipping_mapping', $data ) ) {
+			$sanitized['shipping_mapping'] = [];
+			if ( is_array( $data['shipping_mapping'] ) ) {
+				foreach ( $data['shipping_mapping'] as $method_key => $type ) {
+					if ( empty( $type ) ) {
+						continue; // Skip empty (auto-detect).
+					}
+					if ( in_array( $type, [ 'delivery', 'pickup' ], true ) ) {
+						$sanitized['shipping_mapping'][ sanitize_text_field( $method_key ) ] = $type;
+					}
+				}
+			}
 		}
 
 		// Payments tab fields.
@@ -307,11 +370,53 @@ class OC_Aviv_Pos_Admin {
 			'general_separator'  => ' | ',
 			'variation_separator'=> ': ',
 			'payment_mapping'    => [],
+			'shipping_mapping'   => [],
 		];
 
 		$saved = get_option( OC_AVIV_POS_OPTION_KEY, [] );
 
 		return wp_parse_args( $saved, $defaults );
+	}
+
+	/**
+	 * Get all shipping methods from all zones.
+	 *
+	 * @return array Array of [method_key => ['method_id' => ..., 'instance_id' => ..., 'title' => ...]]
+	 */
+	private static function get_all_shipping_methods(): array {
+		$methods = [];
+		$zones   = WC_Shipping_Zones::get_zones();
+
+		foreach ( $zones as $zone ) {
+			foreach ( $zone['shipping_methods'] as $method ) {
+				if ( ! isset( $method->enabled ) || 'yes' !== $method->enabled ) {
+					continue;
+				}
+				$method_key = $method->id . ':' . $method->instance_id;
+				$methods[ $method_key ] = [
+					'method_id'   => $method->id,
+					'instance_id' => $method->instance_id,
+					'title'       => $method->get_title() ?: $method->get_method_title(),
+				];
+			}
+		}
+
+		// Also check the "Rest of the World" zone (zone 0).
+		$worldwide_zone = WC_Shipping_Zones::get_zone( 0 );
+		if ( $worldwide_zone ) {
+			foreach ( $worldwide_zone->get_shipping_methods( true ) as $method ) {
+				$method_key = $method->id . ':' . $method->instance_id;
+				if ( ! isset( $methods[ $method_key ] ) ) {
+					$methods[ $method_key ] = [
+						'method_id'   => $method->id,
+						'instance_id' => $method->instance_id,
+						'title'       => $method->get_title() ?: $method->get_method_title(),
+					];
+				}
+			}
+		}
+
+		return $methods;
 	}
 
 	public static function ajax_debug_payload(): void {

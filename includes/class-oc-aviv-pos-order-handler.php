@@ -234,19 +234,32 @@ class OC_Aviv_Pos_Order_Handler {
 	}
 
 	/**
-	 * Decide delivery/pickup by shipping method id.
+	 * Decide delivery/pickup by shipping method id, using settings mapping if available.
 	 */
 	private static function get_delivery_mode( WC_Order $order ): string {
+		$settings = OC_Aviv_Pos_Admin::get_settings();
+		$shipping_mapping = $settings['shipping_mapping'] ?? [];
+		
 		$shipping_items = $order->get_items( 'shipping' );
 		foreach ( $shipping_items as $item ) {
-			$method_id = $item->get_method_id();
-			if ( strpos( $method_id, 'oc_woo_local_pickup_method' ) !== false ) {
+			$method_id     = $item->get_method_id();
+			$instance_id   = $item->get_instance_id();
+			$method_key    = $method_id . ':' . $instance_id;
+			
+			// Check if there's a manual mapping for this method.
+			if ( isset( $shipping_mapping[ $method_key ] ) ) {
+				return $shipping_mapping[ $method_key ]; // 'delivery' or 'pickup'
+			}
+			
+			// Fallback to auto-detect by method_id (original logic).
+			if ( strpos( $method_id, 'oc_woo_local_pickup_method' ) !== false || strpos( $method_id, 'local_pickup' ) !== false ) {
 				return 'pickup';
 			}
 			if ( strpos( $method_id, 'oc_woo_advanced_shipping_method' ) !== false ) {
 				return 'delivery';
 			}
 		}
+		
 		// Fallback: if no shipping item, use address presence.
 		if ( $order->has_shipping_address() ) {
 			return 'delivery';

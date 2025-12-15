@@ -3,8 +3,14 @@
 }
 
 .oc-aviv-pos .oc-aviv-pos-mapping td input,
-.oc-aviv-pos .oc-aviv-pos-mapping td select {
+.oc-aviv-pos .oc-aviv-pos-mapping td select,
+.oc-aviv-pos .oc-aviv-pos-shipping-mapping td select {
 	width: 100%;
+}
+
+.oc-aviv-pos .oc-aviv-pos-shipping-mapping td small {
+	display: block;
+	margin-top: 4px;
 }
 
 .oc-aviv-pos .oc-aviv-debug-panels {

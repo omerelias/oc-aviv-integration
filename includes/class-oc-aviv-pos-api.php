@@ -21,8 +21,6 @@ class OC_Aviv_Pos_API {
 	public static function send_order( array $payload, string $vendor, string $account ) {
 		$endpoint = rtrim( apply_filters( 'oc_aviv_pos_base_url', 'http://test.aviv-pos.co.il/api/avivrd' ), '/' );
 		$url      = sprintf( '%s/orders/place/%s/%s', $endpoint, rawurlencode( $vendor ), rawurlencode( $account ) );
-var_dump($url);
-die;
 		$args = [
 			'headers' => [
 				'Content-Type' => 'application/json',
