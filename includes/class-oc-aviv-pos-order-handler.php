@@ -72,8 +72,8 @@ class OC_Aviv_Pos_Order_Handler {
 				'itemType'      => 'PRODUCT',
 				'variations'    => [], // not used in V1; we flatten to comment.
 				'comment'       => self::build_item_comment( $item, $settings ),
-				'count'         => $item->get_quantity(),
-				'orderedCount'  => $item->get_quantity(), 
+				'count'         => $item->get_quantity(), 
+				'orderedCount'  => $item->get_quantity(),
 			];
 		}
 
@@ -157,6 +157,39 @@ class OC_Aviv_Pos_Order_Handler {
 			'צורת-חיתוך',
 			'צורת חיתוך',
 		];
+
+		// Add quantity info from sale units plugin (like "1 יח', 1.5 ק"ג").
+		$quantity_in_units = $item->get_meta( '_ocwsu_quantity_in_units', true );
+		$quantity = $item->get_quantity();
+		
+		if ( $quantity_in_units ) {
+			// Format: "1 יח', 1.5 ק"ג" (matching admin display).
+			$qty_display = $quantity;
+			$qty_suffix = 'ק"ג';
+			if ( $qty_display < 1 ) {
+				$qty_display = $qty_display * 1000;
+				$qty_suffix = 'גרם';
+			}
+			// Format as shown in admin: "1 יח', 1.5 ק"ג"
+			$parts[] = sprintf( '%s יח\', %s %s', $quantity_in_units, $qty_display, $qty_suffix );
+		} elseif ( $quantity ) {
+			// If no units but has weight quantity, check if product is weighable.
+			$product_id = $item->get_product_id();
+			$_product = wc_get_product( $product_id );
+			if ( $_product instanceof WC_Product_Variation ) {
+				$product_id = $_product->get_parent_id();
+			}
+			$weighable = get_post_meta( $product_id, '_ocwsu_weighable', true );
+			if ( $weighable === 'yes' ) {
+				$qty_display = $quantity;
+				$qty_suffix = 'ק"ג';
+				if ( $qty_display < 1 ) {
+					$qty_display = $qty_display * 1000;
+					$qty_suffix = 'גרם';
+				}
+				$parts[] = sprintf( '%s %s', $qty_display, $qty_suffix );
+			}
+		}
 
 		if ( in_array( $mode, [ 'variations', 'variations_and_note' ], true ) ) {
 			$variation_parts = [];
