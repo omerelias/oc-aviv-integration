@@ -50,7 +50,7 @@ class OC_Aviv_Pos_Order_Handler {
 			$order->save();
 		}
 	}
-
+  
 	public static function build_payload( WC_Order $order, array $settings ): array {
 		$items = [];
 
@@ -58,9 +58,16 @@ class OC_Aviv_Pos_Order_Handler {
 			$product = $item->get_product();
 			$id      = $product ? ( $product->get_sku() ?: (string) $product->get_id() ) : (string) $item->get_product_id();
 
+			// Extract cutting-shape variation and append to desc.
+			$cutting_shape = self::get_cutting_shape_variation( $item );
+			$desc = $item->get_name();
+			if ( $cutting_shape ) {
+				$desc .= ' ' . $cutting_shape;
+			}
+
 			$items[] = [
 				'id'            => $id,
-				'desc'          => $item->get_name(),
+				'desc'          => $desc,
 				'price'         => (int) round( ( $item->get_total() + $item->get_total_tax() ) * 100 ),
 				'itemType'      => 'PRODUCT',
 				'variations'    => [], // not used in V1; we flatten to comment.
@@ -142,16 +149,35 @@ class OC_Aviv_Pos_Order_Handler {
 			'הערות לקוח אודות ההזמנה',
 		];
 
+		// Keys that identify cutting-shape variation (to exclude from comment).
+		$cutting_shape_keys = [
+			'pa_cutting-shape',
+			'cutting-shape',
+			'pa_צורת-חיתוך',
+			'צורת-חיתוך',
+			'צורת חיתוך',
+		];
+
 		if ( in_array( $mode, [ 'variations', 'variations_and_note' ], true ) ) {
 			$variation_parts = [];
 			$attributes      = $item->get_formatted_meta_data();
 
 			if ( $attributes ) {
 				foreach ( $attributes as $meta ) {
-					if ( in_array( wp_strip_all_tags( $meta->display_key ), $note_keys, true ) ) {
+					$display_key = wp_strip_all_tags( $meta->display_key ?? '' );
+					$meta_key    = $meta->key ?? '';
+
+					// Skip note keys.
+					if ( in_array( $display_key, $note_keys, true ) ) {
 						continue;
 					}
-					$variation_parts[] = sprintf( '%s%s%s', wp_strip_all_tags( $meta->display_key ), $variation_sep, wp_strip_all_tags( $meta->display_value ) );
+
+					// Skip cutting-shape variation (it's added to desc instead).
+					if ( in_array( $meta_key, $cutting_shape_keys, true ) || in_array( $display_key, $cutting_shape_keys, true ) ) {
+						continue;
+					}
+
+					$variation_parts[] = sprintf( '%s%s%s', $display_key, $variation_sep, wp_strip_all_tags( $meta->display_value ?? '' ) );
 				}
 			}
 
@@ -269,6 +295,43 @@ class OC_Aviv_Pos_Order_Handler {
 			return 'delivery';
 		}
 		return 'pickup';
+	}
+
+	/**
+	 * Extract cutting-shape variation value from item meta.
+	 * Returns the value if found, empty string otherwise.
+	 */
+	private static function get_cutting_shape_variation( WC_Order_Item_Product $item ): string {
+		$cutting_shape_keys = [
+			'pa_cutting-shape',
+			'cutting-shape',
+			'pa_צורת-חיתוך',
+			'צורת-חיתוך',
+			'צורת חיתוך',
+		];
+
+		$attributes = $item->get_formatted_meta_data();
+		if ( $attributes ) {
+			foreach ( $attributes as $meta ) {
+				$meta_key = $meta->key ?? '';
+				$display_key = wp_strip_all_tags( $meta->display_key ?? '' );
+
+				// Check if this is a cutting-shape variation.
+				if ( in_array( $meta_key, $cutting_shape_keys, true ) || in_array( $display_key, $cutting_shape_keys, true ) ) {
+					return wp_strip_all_tags( $meta->display_value ?? '' );
+				}
+			}
+		}
+
+		// Also check direct meta (fallback).
+		foreach ( $cutting_shape_keys as $key ) {
+			$value = $item->get_meta( $key );
+			if ( $value ) {
+				return wp_strip_all_tags( $value );
+			}
+		}
+
+		return '';
 	}
 }
 

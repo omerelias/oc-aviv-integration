@@ -14,8 +14,6 @@ class OC_Aviv_Pos_Admin {
 		add_action( 'admin_enqueue_scripts', [ __CLASS__, 'enqueue_assets' ] );
 		add_action( 'wp_ajax_oc_aviv_pos_debug', [ __CLASS__, 'ajax_debug_payload' ] );
 		add_action( 'wp_ajax_oc_aviv_pos_send_order', [ __CLASS__, 'ajax_send_order' ] );
-		add_action( 'wp_ajax_oc_aviv_pos_send_order_from_edit', [ __CLASS__, 'ajax_send_order_from_edit' ] );
-		add_action( 'woocommerce_admin_order_data_after_order_details', [ __CLASS__, 'add_order_meta_box' ] );
 	}
 
 	public static function add_menu(): void {
@@ -30,7 +28,7 @@ class OC_Aviv_Pos_Admin {
 	}
 
 	public static function enqueue_assets( string $hook ): void {
-		// Load on settings page.
+		// Load only on settings page.
 		if ( strpos( $hook, 'oc-aviv-pos' ) !== false ) {
 			wp_enqueue_style(
 				'oc-aviv-pos-admin',
@@ -56,14 +54,6 @@ class OC_Aviv_Pos_Admin {
 					'loading'   => __( 'Loading…', 'oc-aviv-pos' ),
 				]
 			);
-		}
-
-		// Load on order edit page.
-		if ( 'post.php' === $hook || 'post-new.php' === $hook ) {
-			global $post;
-			if ( $post && 'shop_order' === $post->post_type ) {
-				wp_enqueue_script( 'jquery' );
-			}
 		}
 	}
 
@@ -535,130 +525,5 @@ class OC_Aviv_Pos_Admin {
 		);
 	}
 
-	/**
-	 * Add Aviv POS button to order edit page.
-	 */
-	public static function add_order_meta_box( $order ): void {
-		if ( ! $order instanceof WC_Order ) {
-			return;
-		}
-
-		$order_id = $order->get_id();
-		$sent_to_pos = $order->get_meta( '_oc_aviv_pos_sent' );
-		$sent_at = $order->get_meta( '_oc_aviv_pos_sent_at' );
-		?>
-		<div class="oc-aviv-pos-order-box" style="margin-top: 20px; padding: 15px; background: #f6f7f7; border: 1px solid #c3c4c7; border-radius: 4px;">
-			<h3 style="margin-top: 0;"><?php esc_html_e( 'Aviv POS', 'oc-aviv-pos' ); ?></h3>
-			<?php if ( $sent_to_pos ) : ?>
-				<p style="color: #00a32a; font-weight: 600;">
-					<?php esc_html_e( '✓ נשלח לקופה', 'oc-aviv-pos' ); ?>
-					<?php if ( $sent_at ) : ?>
-						<br />
-						<small style="color: #646970; font-weight: normal;">
-							<?php echo esc_html( sprintf( __( 'נשלח ב: %s', 'oc-aviv-pos' ), date_i18n( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), strtotime( $sent_at ) ) ) ); ?>
-						</small>
-					<?php endif; ?>
-				</p>
-				<button type="button" class="button" id="oc_aviv_resend_order" data-order-id="<?php echo esc_attr( $order_id ); ?>">
-					<?php esc_html_e( 'שלח שוב', 'oc-aviv-pos' ); ?>
-				</button>
-			<?php else : ?>
-				<p style="color: #646970;">
-					<?php esc_html_e( 'הזמנה זו טרם נשלחה ל-Aviv POS.', 'oc-aviv-pos' ); ?>
-				</p>
-				<button type="button" class="button button-primary" id="oc_aviv_send_order_edit" data-order-id="<?php echo esc_attr( $order_id ); ?>">
-					<?php esc_html_e( 'שלח לקופה', 'oc-aviv-pos' ); ?>
-				</button>
-			<?php endif; ?>
-			<span class="oc-aviv-pos-status" style="margin-left: 10px; display: none;"></span>
-		</div>
-		<script>
-		jQuery(function($) {
-			$('#oc_aviv_send_order_edit, #oc_aviv_resend_order').on('click', function() {
-				var $btn = $(this);
-				var orderId = $btn.data('order-id');
-				var $status = $('.oc-aviv-pos-status');
-				
-				if (!confirm('<?php echo esc_js( __( 'האם לשלוח את ההזמנה ל-Aviv POS?', 'oc-aviv-pos' ) ); ?>')) {
-					return;
-				}
-				
-				$btn.prop('disabled', true).text('<?php echo esc_js( __( 'שולח...', 'oc-aviv-pos' ) ); ?>');
-				$status.hide();
-				
-				$.post(ajaxurl, {
-					action: 'oc_aviv_pos_send_order_from_edit',
-					order_id: orderId,
-					nonce: '<?php echo esc_js( wp_create_nonce( 'oc_aviv_pos_send_order_edit' ) ); ?>'
-				}).done(function(resp) {
-					if (resp && resp.success) {
-						$status.text('✓ ' + resp.data.message).css('color', '#00a32a').show();
-						setTimeout(function() {
-							location.reload();
-						}, 1500);
-					} else {
-						var msg = (resp && resp.data && resp.data.message) ? resp.data.message : '<?php echo esc_js( __( 'שגיאה', 'oc-aviv-pos' ) ); ?>';
-						$status.text('✗ ' + msg).css('color', '#d63638').show();
-						$btn.prop('disabled', false).text('<?php echo esc_js( __( 'שלח לקופה', 'oc-aviv-pos' ) ); ?>');
-					}
-				}).fail(function() {
-					$status.text('✗ <?php echo esc_js( __( 'שגיאה בשליחה', 'oc-aviv-pos' ) ); ?>').css('color', '#d63638').show();
-					$btn.prop('disabled', false).text('<?php echo esc_js( __( 'שלח לקופה', 'oc-aviv-pos' ) ); ?>');
-				});
-			});
-		});
-		</script>
-		<?php
-	}
-
-	/**
-	 * AJAX handler for sending order from edit page.
-	 */
-	public static function ajax_send_order_from_edit(): void {
-		check_ajax_referer( 'oc_aviv_pos_send_order_edit', 'nonce' );
-
-		$order_id = isset( $_POST['order_id'] ) ? absint( $_POST['order_id'] ) : 0;
-		if ( ! $order_id ) {
-			wp_send_json_error( [ 'message' => __( 'Order ID is required', 'oc-aviv-pos' ) ], 400 );
-		}
-
-		$order = wc_get_order( $order_id );
-		if ( ! $order ) {
-			wp_send_json_error( [ 'message' => __( 'Order not found', 'oc-aviv-pos' ) ], 404 );
-		}
-
-		$settings = self::get_settings();
-		if ( empty( $settings['vendor_id'] ) || empty( $settings['account_id'] ) ) {
-			wp_send_json_error( [ 'message' => __( 'Vendor ID or Account ID missing in settings', 'oc-aviv-pos' ) ], 400 );
-		}
-
-		$payload = OC_Aviv_Pos_Order_Handler::build_payload( $order, $settings );
-		$result  = OC_Aviv_Pos_API::send_order( $payload, $settings['vendor_id'], $settings['account_id'] );
-
-		$logger = wc_get_logger();
-		$ctx    = [ 'source' => 'oc-aviv-pos', 'order_id' => $order->get_id() ];
-
-		if ( is_wp_error( $result ) ) {
-			$logger->error( 'Failed sending order to Aviv POS (from edit page): ' . $result->get_error_message(), $ctx );
-			wp_send_json_error(
-				[
-					'message' => $result->get_error_message(),
-				],
-				500
-			);
-		}
-
-		$logger->info( 'Order sent to Aviv POS successfully (from edit page)', $ctx );
-		$order->update_meta_data( '_oc_aviv_pos_sent', 'yes' );
-		$order->update_meta_data( '_oc_aviv_pos_sent_at', current_time( 'mysql' ) );
-		$order->add_order_note( __( 'נשלחה הזמנה ל-Aviv POS (ידנית מעמוד הזמנה).', 'oc-aviv-pos' ) );
-		$order->save();
-
-		wp_send_json_success(
-			[
-				'message' => __( 'ההזמנה נשלחה בהצלחה ל-Aviv POS', 'oc-aviv-pos' ),
-			]
-		);
-	}
 }
 
