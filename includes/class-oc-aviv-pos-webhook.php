@@ -99,6 +99,11 @@ class OC_Aviv_Pos_Webhook {
 			$data = $_POST;
 		}
 
+		// Ensure $data is an array
+		if ( ! is_array( $data ) ) {
+			$data = [];
+		}
+
 		// Log the incoming request
 		$logger = wc_get_logger();
 		$logger->info( 'Aviv POS Webhook received: ' . wp_json_encode( $data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE ), [ 'source' => 'oc-aviv-pos-webhook' ] );
