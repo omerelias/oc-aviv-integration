@@ -42,6 +42,13 @@ class OC_Aviv_Pos_Order_Handler {
 
 		if ( is_wp_error( $result ) ) {
 			$logger->error( 'Failed sending order to Aviv POS: ' . $result->get_error_message(), $ctx );
+		} elseif ( is_array( $result ) && ! empty( $result['already_exists'] ) ) {
+			// Order already exists - this is actually a success case
+			$logger->info( 'Order already exists in Aviv POS: ' . ( $result['message'] ?? '' ), $ctx );
+			$order->update_meta_data( '_oc_aviv_pos_sent', 'yes' );
+			$order->update_meta_data( '_oc_aviv_pos_sent_at', current_time( 'mysql' ) );
+			$order->add_order_note( __( 'ההזמנה כבר קיימת ב-Aviv POS.', 'oc-aviv-pos' ) );
+			$order->save();
 		} else {
 			$logger->info( 'Order sent to Aviv POS successfully', $ctx );
 			$order->update_meta_data( '_oc_aviv_pos_sent', 'yes' );
@@ -103,16 +110,15 @@ class OC_Aviv_Pos_Order_Handler {
 		];
 
 		$delivery_mode = self::get_delivery_mode( $order );
-		$delivery_type = $delivery_mode === 'pickup' ? 'PICKUP' : 'DELIVERY';
-		$serving_type  = $delivery_mode === 'pickup' ? 'PICKUP' : 'DELIVERY';
-		$webhook_url   = $settings['webhook_url'] ?? '';
+		$is_pickup = $delivery_mode === 'pickup';
+		$webhook_url = $settings['webhook_url'] ?? '';
 
-		return [
+		$payload = [
 			'shareToken'        => (string) $order->get_order_number(),
 			'items'             => $items,
 			'charges'           => [],
 			'comment'           => '',
-			'formatCreatedDate' => current_time( 'c' ),
+			'formatCreatedDate' => self::format_datetime_utc( 'now' ),
 			'formatDeliveryDate'=> self::build_delivery_datetime( $order ),
 			'status'            => 'OPEN',
 			'contact'           => [
@@ -122,8 +128,7 @@ class OC_Aviv_Pos_Order_Handler {
 				'phone'     => $order->get_billing_phone(),
 				'fax'       => '',
 			],
-			'deliveryType'      => $delivery_type,
-			'servingType'       => $serving_type,
+			'deliveryType'      => $is_pickup ? 'TAKEOUT' : 'DELIVERY',
 			'address'           => $address, 
 			'payments'          => $payments,
 			'takeoutSets'       => 0,
@@ -133,6 +138,12 @@ class OC_Aviv_Pos_Order_Handler {
 			'deliveryCharge'    => (int) round( $order->get_shipping_total() * 100 ),
 			'tip'               => 0,
 		];
+
+		// Only add servingType for delivery (not for pickup/takeout)
+		if ( ! $is_pickup ) {
+			$payload['servingType'] = 'DELIVERY';
+		}
+		return $payload;
 	}
 
 	private static function build_item_comment( WC_Order_Item_Product $item, array $settings ): string {
@@ -303,6 +314,32 @@ class OC_Aviv_Pos_Order_Handler {
 	}
 
 	/**
+	 * Format datetime to UTC with milliseconds and Z suffix (e.g. "2025-12-21T08:12:32.055Z").
+	 *
+	 * @param string|DateTimeInterface $datetime
+	 * @return string
+	 */
+	private static function format_datetime_utc( $datetime ): string {
+		if ( is_string( $datetime ) ) {
+			$dt = date_create_immutable( $datetime, wp_timezone() );
+		} elseif ( $datetime instanceof DateTimeInterface ) {
+			$dt = $datetime;
+		} else {
+			$dt = date_create_immutable( 'now', wp_timezone() );
+		}
+
+		if ( ! $dt ) {
+			$dt = date_create_immutable( 'now', wp_timezone() );
+		}
+
+		// Convert to UTC
+		$dt_utc = $dt->setTimezone( new DateTimeZone( 'UTC' ) );
+
+		// Format: Y-m-d\TH:i:s.v\Z (with milliseconds and Z)
+		return $dt_utc->format( 'Y-m-d\TH:i:s.v\Z' );
+	}
+
+	/**
 	 * Build delivery date-time from shipping meta if available.
 	 */
 	private static function build_delivery_datetime( WC_Order $order ): string {
@@ -321,10 +358,10 @@ class OC_Aviv_Pos_Order_Handler {
 		}
 
 		if ( $dt ) {
-			return $dt->format( DateTime::ATOM );
+			return self::format_datetime_utc( $dt );
 		}
 
-		return current_time( 'c' );
+		return self::format_datetime_utc( current_time( 'mysql', true ) );
 	}
 
 	/**

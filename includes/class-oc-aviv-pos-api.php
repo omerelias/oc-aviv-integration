@@ -47,6 +47,19 @@ class OC_Aviv_Pos_API {
 			return $body ?: [];
 		}
 
+		// Check if this is "Order already exists" error - this is actually a success case
+		if ( $code === 400 && is_array( $body ) ) {
+			$error_message = $body['apierror']['message'] ?? $body['apierror']['debugMessage'] ?? '';
+			if ( stripos( $error_message, 'already exists' ) !== false || stripos( $error_message, 'already exist' ) !== false ) {
+				// Return special success indicator for duplicate order
+				return [
+					'already_exists' => true,
+					'message'        => $error_message,
+					'body'           => $body,
+				];
+			}
+		}
+
 		return new WP_Error(
 			'oc_aviv_pos_http_error',
 			sprintf( 'HTTP %s - %s', $code, wp_remote_retrieve_response_message( $response ) ),

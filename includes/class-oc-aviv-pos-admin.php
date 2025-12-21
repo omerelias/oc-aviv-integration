@@ -514,6 +514,22 @@ class OC_Aviv_Pos_Admin {
 			);
 		}
 
+		// Check if order already exists - this is actually a success case
+		if ( is_array( $result ) && ! empty( $result['already_exists'] ) ) {
+			$message = $result['message'] ?? __( 'Order already exists in Aviv POS', 'oc-aviv-pos' );
+			$logger->info( 'Order already exists in Aviv POS (manual): ' . $message, $ctx );
+			$order->add_order_note( __( 'ההזמנה כבר קיימת ב-Aviv POS (ידנית מדיבאג).', 'oc-aviv-pos' ) );
+			
+			wp_send_json_success(
+				[
+					'message'      => $message,
+					'already_exists' => true,
+					'payload'      => $payload,
+					'response'     => $result['body'] ?? $result,
+				]
+			);
+		}
+
 		$logger->info( 'Order sent to Aviv POS successfully (manual)', $ctx );
 		$order->add_order_note( __( 'נשלחה הזמנה ל-Aviv POS (ידנית מדיבאג).', 'oc-aviv-pos' ) );
 

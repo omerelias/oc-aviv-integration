@@ -112,7 +112,13 @@
 				$payloadBox.text(JSON.stringify(resp.data.payload, null, 2));
 				$requestBox.text(JSON.stringify({ method: 'POST', url: 'Sent to Aviv POS', note: 'Request sent successfully' }, null, 2));
 				$responseBox.text(JSON.stringify(resp.data.response || {}, null, 2));
-				alert('Order sent successfully!');
+				
+				// Check if order already exists
+				if(resp.data && resp.data.already_exists){
+					alert('ההזמנה כבר קיימת ב-Aviv POS: ' + (resp.data.message || 'Order already exists'));
+				} else {
+					alert('Order sent successfully!');
+				}
 			}).fail(function(xhr){
 				var err = 'Error: ' + xhr.status;
 				$payloadBox.text(err);
