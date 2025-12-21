@@ -281,7 +281,7 @@ class OC_Aviv_Pos_Order_Handler {
 		return trim( implode( $general_sep, $parts ) );
 	}
 
-	private static function map_payments( WC_Order $order, array $settings ): array {
+	public static function map_payments( WC_Order $order, array $settings ): array {
 		$payment_method = $order->get_payment_method();
 		$mappings       = $settings['payment_mapping'] ?? [];
 		$mapping        = null;

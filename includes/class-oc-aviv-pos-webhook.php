@@ -117,22 +117,30 @@ class OC_Aviv_Pos_Webhook {
 			
 			$error_data = array_merge( $data, [ '_error' => 'Missing required field: shareToken' ] );
 			
-			// Prepare error response for logging
-			$error_response_for_log = null;
-			if ( $request instanceof WP_REST_Request ) {
-				$error_response_for_log = [ 'error' => 'Missing required field: shareToken' ];
-			} else {
-				$error_response_for_log = [ 'success' => false, 'data' => [ 'message' => 'Missing required field: shareToken' ] ];
-			}
+			// Build error response in Aviv POS format
+			$error_response = [
+				'error'         => 1,
+				'errorMsg'      => 'Missing required field: shareToken',
+				'shareToken'    => '',
+				'amount'        => 0,
+				'proofToken'    => '',
+				'checkoutPayment' => [
+					'checkoutType' => 'CASH',
+				],
+			];
 			
 			// Log error call with response
-			self::log_webhook_call( $error_data, $error_response_for_log );
+			self::log_webhook_call( $error_data, $error_response );
 			
 			if ( $request instanceof WP_REST_Request ) {
-				return new WP_REST_Response( [ 'error' => 'Missing required field: shareToken' ], 400 );
+				return new WP_REST_Response( $error_response, 400 );
 			}
-			wp_send_json_error( [ 'message' => 'Missing required field: shareToken' ], 400 );
-			return;
+			
+			// For query var fallback, output JSON directly
+			header( 'Content-Type: application/json' );
+			http_response_code( 400 );
+			echo wp_json_encode( $error_response, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES );
+			exit;
 		}
 
 		$share_token = sanitize_text_field( $data['shareToken'] );
@@ -145,26 +153,35 @@ class OC_Aviv_Pos_Webhook {
 			
 			$error_data = array_merge( $data, [ '_error' => 'Order not found', '_shareToken' => $share_token ] );
 			
-			// Prepare error response for logging
-			$error_response_for_log = null;
-			if ( $request instanceof WP_REST_Request ) {
-				$error_response_for_log = [ 'error' => 'Order not found' ];
-			} else {
-				$error_response_for_log = [ 'success' => false, 'data' => [ 'message' => 'Order not found' ] ];
-			}
+			// Build error response in Aviv POS format
+			$error_response = [
+				'error'         => 1,
+				'errorMsg'      => 'Order not found',
+				'shareToken'    => $share_token,
+				'amount'        => 0,
+				'proofToken'    => '',
+				'checkoutPayment' => [
+					'checkoutType' => 'CASH',
+				],
+			];
 			
 			// Log error call with response
-			self::log_webhook_call( $error_data, $error_response_for_log );
+			self::log_webhook_call( $error_data, $error_response );
 			
 			if ( $request instanceof WP_REST_Request ) {
-				return new WP_REST_Response( [ 'error' => 'Order not found' ], 404 );
+				return new WP_REST_Response( $error_response, 404 );
 			}
-			wp_send_json_error( [ 'message' => 'Order not found' ], 404 );
-			return;
+			
+			// For query var fallback, output JSON directly
+			header( 'Content-Type: application/json' );
+			http_response_code( 404 );
+			echo wp_json_encode( $error_response, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES );
+			exit;
 		}
 
 		// Check if this is a status update (has 'type') or items update (has 'items')
-		$response_data = [ 'success' => true, 'order_id' => $order->get_id() ];
+		$success = true;
+		$error_msg = '';
 		
 		if ( ! empty( $data['type'] ) ) {
 			// Status update
@@ -172,46 +189,54 @@ class OC_Aviv_Pos_Webhook {
 		} elseif ( ! empty( $data['items'] ) && is_array( $data['items'] ) ) {
 			// Items update
 			$updated_count = self::handle_items_update_for_order( $order, $data, $logger );
-			$response_data['updated_items'] = $updated_count;
 		} else {
 			$logger->warning( 'Aviv POS Webhook: Unknown webhook type (no type or items)', [ 'source' => 'oc-aviv-pos-webhook', 'order_id' => $order->get_id() ] );
-			
-			// Prepare error response for logging
-			$error_response_for_log = null;
-			if ( $request instanceof WP_REST_Request ) {
-				$error_response_for_log = [ 'error' => 'Unknown webhook type' ];
-			} else {
-				$error_response_for_log = [ 'success' => false, 'data' => [ 'message' => 'Unknown webhook type' ] ];
-			}
-			
-			// Log error call with response
-			self::log_webhook_call( $data, $error_response_for_log );
-			
-			if ( $request instanceof WP_REST_Request ) {
-				return new WP_REST_Response( [ 'error' => 'Unknown webhook type' ], 400 );
-			}
-			wp_send_json_error( [ 'message' => 'Unknown webhook type' ], 400 );
-			return;
+			$success = false;
+			$error_msg = 'Unknown webhook type';
 		}
 
-		// Prepare response for logging
-		// For REST API: response is the data array
-		// For wp_send_json_success: response is { success: true, data: ... }
-		$response_for_log = null;
-		if ( $request instanceof WP_REST_Request ) {
-			$response_for_log = $response_data;
-		} else {
-			$response_for_log = [ 'success' => true, 'data' => $response_data ];
+		// Build response in Aviv POS format
+		$settings = OC_Aviv_Pos_Admin::get_settings();
+		$payments = OC_Aviv_Pos_Order_Handler::map_payments( $order, $settings );
+		$checkout_type = 'CASH'; // Default
+		
+		// Determine checkout type from payment
+		if ( ! empty( $payments ) && isset( $payments[0]['paymentType'] ) ) {
+			$checkout_type = $payments[0]['paymentType']; // CASH or POSTPAID
 		}
+		
+		$share_token = (string) $order->get_order_number();
+		$amount = (int) round( $order->get_total() * 100 ); // Amount in agorot
+		
+		// Get proofToken if available (e.g., CardcomToken)
+		$proof_token = get_post_meta( $order->get_id(), 'CardcomToken', true ) ?: '';
+		
+		$response_data = [
+			'error'         => $success ? 0 : 1,
+			'errorMsg'      => $error_msg ?: '',
+			'shareToken'    => $share_token,
+			'amount'        => $amount,
+			'proofToken'    => $proof_token,
+			'checkoutPayment' => [
+				'checkoutType' => $checkout_type,
+			],
+		];
 
 		// Save webhook call to debug log with response
-		self::log_webhook_call( $data, $response_for_log );
+		self::log_webhook_call( $data, $response_data );
 
-		// Return success response
+		// Return response
 		if ( $request instanceof WP_REST_Request ) {
-			return new WP_REST_Response( $response_data, 200 );
+			$status_code = $success ? 200 : 400;
+			return new WP_REST_Response( $response_data, $status_code );
 		}
-		wp_send_json_success( $response_data, 200 );
+		
+		// For query var fallback, output JSON directly
+		header( 'Content-Type: application/json' );
+		$status_code = $success ? 200 : 400;
+		http_response_code( $status_code );
+		echo wp_json_encode( $response_data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES );
+		exit;
 	}
 
 	/**
