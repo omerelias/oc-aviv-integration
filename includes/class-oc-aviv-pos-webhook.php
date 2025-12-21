@@ -315,6 +315,11 @@ class OC_Aviv_Pos_Webhook {
 			}
 			
 			if ( $quantity_changed || $price_changed ) {
+				// Calculate price per unit BEFORE updating quantity
+				// This preserves the original unit price
+				$price_per_unit_subtotal = $current_subtotal / max( $current_quantity, 0.001 );
+				$price_per_unit_tax = $current_subtotal_tax / max( $current_quantity, 0.001 );
+				
 				// Update quantity
 				$found_item->set_quantity( $new_count );
 				
@@ -346,23 +351,15 @@ class OC_Aviv_Pos_Webhook {
 					$found_item->set_subtotal_tax( $new_tax );
 					$found_item->set_total_tax( $new_tax );
 				} elseif ( $quantity_changed ) {
-					// Only quantity changed, recalculate totals with same price per unit
-					$price_per_unit = $current_subtotal / max( $current_quantity, 0.001 );
-					$new_subtotal = $price_per_unit * $new_count;
+					// Only quantity changed - multiply original unit price by new quantity
+					// This ensures the total increases proportionally, not the unit price decreases
+					$new_subtotal = $price_per_unit_subtotal * $new_count;
+					$new_tax = $price_per_unit_tax * $new_count;
 					
 					$found_item->set_subtotal( $new_subtotal );
 					$found_item->set_total( $new_subtotal );
-					
-					// Recalculate tax proportionally
-					if ( $current_subtotal > 0 && $current_subtotal_tax > 0 ) {
-						$tax_rate = ( $current_subtotal_tax / $current_subtotal ) * 100;
-						$new_tax = $new_subtotal * ( $tax_rate / 100 );
-						$found_item->set_subtotal_tax( $new_tax );
-						$found_item->set_total_tax( $new_tax );
-					} else {
-						$found_item->set_subtotal_tax( 0 );
-						$found_item->set_total_tax( 0 );
-					}
+					$found_item->set_subtotal_tax( $new_tax );
+					$found_item->set_total_tax( $new_tax );
 				}
 				
 				$found_item->save();
@@ -382,8 +379,24 @@ class OC_Aviv_Pos_Webhook {
 		}
 
 		if ( $updated_count > 0 ) {
-			// Recalculate order totals
-			$order->calculate_totals();
+			// Don't call calculate_totals() here - it will recalculate unit prices
+			// We've already set the correct subtotals and taxes above
+			// Just update the order totals manually
+			$order_total = 0;
+			$order_subtotal = 0;
+			$order_tax = 0;
+			
+			foreach ( $order->get_items() as $item ) {
+				$order_subtotal += $item->get_subtotal();
+				$order_tax += $item->get_subtotal_tax();
+			}
+			
+			$order_total = $order_subtotal + $order_tax + $order->get_shipping_total() - $order->get_total_discount();
+			
+			$order->set_subtotal( $order_subtotal );
+			$order->set_total( $order_total );
+			$order->set_total_tax( $order_tax );
+			
 			$order->add_order_note( 
 				sprintf( __( 'עודכנו %d פריטים מ-Aviv POS', 'oc-aviv-pos' ), $updated_count )
 			);
