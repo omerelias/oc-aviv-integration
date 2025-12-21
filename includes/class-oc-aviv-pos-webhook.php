@@ -182,6 +182,7 @@ class OC_Aviv_Pos_Webhook {
 		// Check if this is a status update (has 'type') or items update (has 'items')
 		$success = true;
 		$error_msg = '';
+		$updated_count = 0;
 		
 		if ( ! empty( $data['type'] ) ) {
 			// Status update
@@ -189,6 +190,13 @@ class OC_Aviv_Pos_Webhook {
 		} elseif ( ! empty( $data['items'] ) && is_array( $data['items'] ) ) {
 			// Items update
 			$updated_count = self::handle_items_update_for_order( $order, $data, $logger );
+			
+			// Mark order as completed after items update
+			$order->update_status( 'wc-completed', __( 'הזמנה הושלמה לאחר עדכון כמויות מ-Aviv POS', 'oc-aviv-pos' ) );
+			$logger->info( 
+				sprintf( 'Aviv POS Webhook: Order %s marked as completed after items update', $order->get_order_number() ),
+				[ 'source' => 'oc-aviv-pos-webhook', 'order_id' => $order->get_id() ]
+			);
 		} else {
 			$logger->warning( 'Aviv POS Webhook: Unknown webhook type (no type or items)', [ 'source' => 'oc-aviv-pos-webhook', 'order_id' => $order->get_id() ] );
 			$success = false;
