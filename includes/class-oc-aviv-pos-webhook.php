@@ -141,12 +141,15 @@ class OC_Aviv_Pos_Webhook {
 		}
 
 		// Check if this is a status update (has 'type') or items update (has 'items')
+		$response_data = [ 'success' => true, 'order_id' => $order->get_id() ];
+		
 		if ( ! empty( $data['type'] ) ) {
 			// Status update
 			self::handle_status_update_for_order( $order, $data, $logger );
 		} elseif ( ! empty( $data['items'] ) && is_array( $data['items'] ) ) {
 			// Items update
-			self::handle_items_update_for_order( $order, $data, $logger );
+			$updated_count = self::handle_items_update_for_order( $order, $data, $logger );
+			$response_data['updated_items'] = $updated_count;
 		} else {
 			$logger->warning( 'Aviv POS Webhook: Unknown webhook type (no type or items)', [ 'source' => 'oc-aviv-pos-webhook', 'order_id' => $order->get_id() ] );
 			
@@ -159,9 +162,9 @@ class OC_Aviv_Pos_Webhook {
 
 		// Return success response
 		if ( $request instanceof WP_REST_Request ) {
-			return new WP_REST_Response( [ 'success' => true, 'order_id' => $order->get_id() ], 200 );
+			return new WP_REST_Response( $response_data, 200 );
 		}
-		wp_send_json_success( [ 'order_id' => $order->get_id() ], 200 );
+		wp_send_json_success( $response_data, 200 );
 	}
 
 	/**
@@ -257,8 +260,9 @@ class OC_Aviv_Pos_Webhook {
 	 * @param WC_Order $order Order object.
 	 * @param array    $data  Webhook data with items.
 	 * @param WC_Log_Handler_Interface $logger Logger instance.
+	 * @return int Number of items updated.
 	 */
-	private static function handle_items_update_for_order( WC_Order $order, array $data, $logger ): void {
+	private static function handle_items_update_for_order( WC_Order $order, array $data, $logger ): int {
 		$items = $data['items'] ?? [];
 		$updated_count = 0;
 
@@ -407,6 +411,8 @@ class OC_Aviv_Pos_Webhook {
 				[ 'source' => 'oc-aviv-pos-webhook', 'order_id' => $order->get_id() ]
 			);
 		}
+		
+		return $updated_count;
 	}
 
 	/**
