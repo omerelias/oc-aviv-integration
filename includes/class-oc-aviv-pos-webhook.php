@@ -107,29 +107,74 @@ class OC_Aviv_Pos_Webhook {
 		self::log_webhook_call( $data );
 
 		// Validate required fields
-		if ( empty( $data['shareToken'] ) || empty( $data['type'] ) ) {
-			$logger->warning( 'Aviv POS Webhook: Missing required fields (shareToken or type)', [ 'source' => 'oc-aviv-pos-webhook' ] );
+		if ( empty( $data['shareToken'] ) ) {
+			$logger->warning( 'Aviv POS Webhook: Missing required field (shareToken)', [ 'source' => 'oc-aviv-pos-webhook' ] );
 			
 			// Log error call
-			$error_data = array_merge( $data, [ '_error' => 'Missing required fields' ] );
+			$error_data = array_merge( $data, [ '_error' => 'Missing required field: shareToken' ] );
 			self::log_webhook_call( $error_data );
 			
 			if ( $request instanceof WP_REST_Request ) {
-				return new WP_REST_Response( [ 'error' => 'Missing required fields' ], 400 );
+				return new WP_REST_Response( [ 'error' => 'Missing required field: shareToken' ], 400 );
 			}
-			wp_send_json_error( [ 'message' => 'Missing required fields' ], 400 );
+			wp_send_json_error( [ 'message' => 'Missing required field: shareToken' ], 400 );
 			return;
 		}
 
 		$share_token = sanitize_text_field( $data['shareToken'] );
-		$status_type = sanitize_text_field( $data['type'] );
-		$order_data  = isset( $data['data'] ) ? sanitize_text_field( $data['data'] ) : '';
-		$time_status = isset( $data['timeStatus'] ) ? sanitize_text_field( $data['timeStatus'] ) : '';
 
 		// Find order by order number (shareToken)
+		$order = self::find_order_by_share_token( $share_token );
+
+		if ( ! $order ) {
+			$logger->warning( 'Aviv POS Webhook: Order not found for shareToken: ' . $share_token, [ 'source' => 'oc-aviv-pos-webhook' ] );
+			
+			// Log error call
+			$error_data = array_merge( $data, [ '_error' => 'Order not found', '_shareToken' => $share_token ] );
+			self::log_webhook_call( $error_data );
+			
+			if ( $request instanceof WP_REST_Request ) {
+				return new WP_REST_Response( [ 'error' => 'Order not found' ], 404 );
+			}
+			wp_send_json_error( [ 'message' => 'Order not found' ], 404 );
+			return;
+		}
+
+		// Check if this is a status update (has 'type') or items update (has 'items')
+		if ( ! empty( $data['type'] ) ) {
+			// Status update
+			self::handle_status_update_for_order( $order, $data, $logger );
+		} elseif ( ! empty( $data['items'] ) && is_array( $data['items'] ) ) {
+			// Items update
+			self::handle_items_update_for_order( $order, $data, $logger );
+		} else {
+			$logger->warning( 'Aviv POS Webhook: Unknown webhook type (no type or items)', [ 'source' => 'oc-aviv-pos-webhook', 'order_id' => $order->get_id() ] );
+			
+			if ( $request instanceof WP_REST_Request ) {
+				return new WP_REST_Response( [ 'error' => 'Unknown webhook type' ], 400 );
+			}
+			wp_send_json_error( [ 'message' => 'Unknown webhook type' ], 400 );
+			return;
+		}
+
+		// Return success response
+		if ( $request instanceof WP_REST_Request ) {
+			return new WP_REST_Response( [ 'success' => true, 'order_id' => $order->get_id() ], 200 );
+		}
+		wp_send_json_success( [ 'order_id' => $order->get_id() ], 200 );
+	}
+
+	/**
+	 * Find order by share token (order number).
+	 *
+	 * @param string $share_token Order number.
+	 * @return WC_Order|null
+	 */
+	private static function find_order_by_share_token( string $share_token ): ?WC_Order {
+		// Try by ID first
 		$order = wc_get_order( $share_token );
 		
-		// If not found by ID, try to find by order number
+		// If not found by ID, try to find by order number meta
 		if ( ! $order ) {
 			$orders = wc_get_orders(
 				[
@@ -160,19 +205,20 @@ class OC_Aviv_Pos_Webhook {
 			}
 		}
 
-		if ( ! $order ) {
-			$logger->warning( 'Aviv POS Webhook: Order not found for shareToken: ' . $share_token, [ 'source' => 'oc-aviv-pos-webhook' ] );
-			
-			// Log error call
-			$error_data = array_merge( $data, [ '_error' => 'Order not found', '_shareToken' => $share_token ] );
-			self::log_webhook_call( $error_data );
-			
-			if ( $request instanceof WP_REST_Request ) {
-				return new WP_REST_Response( [ 'error' => 'Order not found' ], 404 );
-			}
-			wp_send_json_error( [ 'message' => 'Order not found' ], 404 );
-			return;
-		}
+		return $order ?: null;
+	}
+
+	/**
+	 * Handle status update for an order.
+	 *
+	 * @param WC_Order $order Order object.
+	 * @param array    $data  Webhook data.
+	 * @param WC_Log_Handler_Interface $logger Logger instance.
+	 */
+	private static function handle_status_update_for_order( WC_Order $order, array $data, $logger ): void {
+		$status_type = sanitize_text_field( $data['type'] );
+		$order_data  = isset( $data['data'] ) ? sanitize_text_field( $data['data'] ) : '';
+		$time_status = isset( $data['timeStatus'] ) ? sanitize_text_field( $data['timeStatus'] ) : '';
 
 		// Map Aviv POS status to WooCommerce status
 		$wc_status = self::map_aviv_status_to_wc( $status_type );
@@ -188,7 +234,7 @@ class OC_Aviv_Pos_Webhook {
 			$order->save();
 
 			$logger->info( 
-				sprintf( 'Aviv POS Webhook: Order %s status updated to %s (Aviv: %s)', $share_token, $wc_status, $status_type ),
+				sprintf( 'Aviv POS Webhook: Order %s status updated to %s (Aviv: %s)', $order->get_order_number(), $wc_status, $status_type ),
 				[ 'source' => 'oc-aviv-pos-webhook', 'order_id' => $order->get_id() ]
 			);
 		} else {
@@ -199,16 +245,155 @@ class OC_Aviv_Pos_Webhook {
 			$order->save();
 
 			$logger->info( 
-				sprintf( 'Aviv POS Webhook: Order %s received status %s (not mapped to WC status)', $share_token, $status_type ),
+				sprintf( 'Aviv POS Webhook: Order %s received status %s (not mapped to WC status)', $order->get_order_number(), $status_type ),
 				[ 'source' => 'oc-aviv-pos-webhook', 'order_id' => $order->get_id() ]
 			);
 		}
+	}
 
-		// Return success response
-		if ( $request instanceof WP_REST_Request ) {
-			return new WP_REST_Response( [ 'success' => true, 'order_id' => $order->get_id() ], 200 );
+	/**
+	 * Handle items update for an order.
+	 *
+	 * @param WC_Order $order Order object.
+	 * @param array    $data  Webhook data with items.
+	 * @param WC_Log_Handler_Interface $logger Logger instance.
+	 */
+	private static function handle_items_update_for_order( WC_Order $order, array $data, $logger ): void {
+		$items = $data['items'] ?? [];
+		$updated_count = 0;
+
+		foreach ( $items as $item_data ) {
+			$item_id = $item_data['id'] ?? '';
+			$new_count = isset( $item_data['count'] ) ? floatval( $item_data['count'] ) : null;
+			$item_price_agorot = isset( $item_data['price'] ) ? floatval( $item_data['price'] ) : null; // Price in agorot
+
+			if ( empty( $item_id ) || $new_count === null ) {
+				continue;
+			}
+
+			// Find matching line item in order
+			$found_item = null;
+			foreach ( $order->get_items() as $line_item ) {
+				$product = $line_item->get_product();
+				if ( ! $product ) {
+					continue;
+				}
+
+				// Match by SKU or product ID
+				$product_id = $product->get_sku() ?: (string) $product->get_id();
+				if ( (string) $product_id === (string) $item_id ) {
+					$found_item = $line_item;
+					break;
+				}
+			}
+
+			if ( ! $found_item ) {
+				$logger->warning( 
+					sprintf( 'Aviv POS Webhook: Item %s not found in order %s', $item_id, $order->get_order_number() ),
+					[ 'source' => 'oc-aviv-pos-webhook', 'order_id' => $order->get_id() ]
+				);
+				continue;
+			}
+
+			$current_quantity = $found_item->get_quantity();
+			
+			// Get current values before update
+			$current_subtotal = $found_item->get_subtotal();
+			$current_subtotal_tax = $found_item->get_subtotal_tax();
+			$current_total_with_tax = $current_subtotal + $current_subtotal_tax;
+			
+			// Check if quantity or price changed
+			$quantity_changed = abs( $current_quantity - $new_count ) > 0.001; // Use small epsilon for float comparison
+			$price_changed = false;
+			
+			if ( $item_price_agorot !== null ) {
+				// Price in agorot is the total line price (subtotal + tax), same format as we send in build_payload
+				// Convert to shekels
+				$new_total_with_tax = $item_price_agorot / 100;
+				
+				$price_changed = abs( $current_total_with_tax - $new_total_with_tax ) > 0.01;
+			}
+			
+			if ( $quantity_changed || $price_changed ) {
+				// Update quantity
+				$found_item->set_quantity( $new_count );
+				
+				// Recalculate price if provided
+				if ( $item_price_agorot !== null ) {
+					// Price in agorot is the total line price (subtotal + tax)
+					// Convert to shekels
+					$new_total_with_tax = $item_price_agorot / 100;
+					
+					// Calculate tax rate from original item to split the new total
+					$tax_rate = 0;
+					if ( $current_subtotal > 0 && $current_subtotal_tax > 0 ) {
+						$tax_rate = ( $current_subtotal_tax / $current_subtotal ) * 100;
+					}
+					
+					// Split new total between subtotal and tax
+					if ( $tax_rate > 0 ) {
+						// Calculate subtotal from total (total = subtotal * (1 + tax_rate/100))
+						$new_subtotal = $new_total_with_tax / ( 1 + ( $tax_rate / 100 ) );
+						$new_tax = $new_total_with_tax - $new_subtotal;
+					} else {
+						// No tax
+						$new_subtotal = $new_total_with_tax;
+						$new_tax = 0;
+					}
+					
+					$found_item->set_subtotal( $new_subtotal );
+					$found_item->set_total( $new_subtotal );
+					$found_item->set_subtotal_tax( $new_tax );
+					$found_item->set_total_tax( $new_tax );
+				} elseif ( $quantity_changed ) {
+					// Only quantity changed, recalculate totals with same price per unit
+					$price_per_unit = $current_subtotal / max( $current_quantity, 0.001 );
+					$new_subtotal = $price_per_unit * $new_count;
+					
+					$found_item->set_subtotal( $new_subtotal );
+					$found_item->set_total( $new_subtotal );
+					
+					// Recalculate tax proportionally
+					if ( $current_subtotal > 0 && $current_subtotal_tax > 0 ) {
+						$tax_rate = ( $current_subtotal_tax / $current_subtotal ) * 100;
+						$new_tax = $new_subtotal * ( $tax_rate / 100 );
+						$found_item->set_subtotal_tax( $new_tax );
+						$found_item->set_total_tax( $new_tax );
+					} else {
+						$found_item->set_subtotal_tax( 0 );
+						$found_item->set_total_tax( 0 );
+					}
+				}
+				
+				$found_item->save();
+				$updated_count++;
+				
+				$logger->info( 
+					sprintf( 'Aviv POS Webhook: Order %s item %s updated - quantity: %s → %s%s', 
+						$order->get_order_number(), 
+						$item_id, 
+						$current_quantity, 
+						$new_count,
+						$price_changed ? ' (price also updated)' : ''
+					),
+					[ 'source' => 'oc-aviv-pos-webhook', 'order_id' => $order->get_id() ]
+				);
+			}
 		}
-		wp_send_json_success( [ 'order_id' => $order->get_id() ], 200 );
+
+		if ( $updated_count > 0 ) {
+			// Recalculate order totals
+			$order->calculate_totals();
+			$order->add_order_note( 
+				sprintf( __( 'עודכנו %d פריטים מ-Aviv POS', 'oc-aviv-pos' ), $updated_count )
+			);
+			$order->save();
+
+			$logger->info( 
+				sprintf( 'Aviv POS Webhook: Order %s items updated (%d items changed)', $order->get_order_number(), $updated_count ),
+				[ 'source' => 'oc-aviv-pos-webhook', 'order_id' => $order->get_id() ]
+			);
+		}
 	}
 
 	/**
