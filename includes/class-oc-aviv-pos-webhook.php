@@ -263,6 +263,14 @@ class OC_Aviv_Pos_Webhook {
 	 * @return int Number of items updated.
 	 */
 	private static function handle_items_update_for_order( WC_Order $order, array $data, $logger ): int {
+		// Temporarily remove hooks that might recalculate prices
+		// This prevents theme/plugin hooks from interfering with our price updates
+		$removed_hooks = [];
+		if ( has_action( 'woocommerce_before_calculate_totals', 'sea2door_add_custom_price' ) ) {
+			remove_action( 'woocommerce_before_calculate_totals', 'sea2door_add_custom_price', 20 );
+			$removed_hooks[] = [ 'woocommerce_before_calculate_totals', 'sea2door_add_custom_price', 20 ];
+		}
+		
 		$items = $data['items'] ?? [];
 		$updated_count = 0;
 
@@ -324,10 +332,8 @@ class OC_Aviv_Pos_Webhook {
 				$price_per_unit_subtotal = $current_subtotal / max( $current_quantity, 0.001 );
 				$price_per_unit_tax = $current_subtotal_tax / max( $current_quantity, 0.001 );
 				
-				// Update quantity
-				$found_item->set_quantity( $new_count );
-				
-				// Recalculate price if provided
+				// Calculate new subtotal and tax BEFORE updating quantity
+				// This ensures the unit price stays the same
 				if ( $item_price_agorot !== null ) {
 					// Price in agorot is the total line price (subtotal + tax)
 					// Convert to shekels
@@ -349,22 +355,26 @@ class OC_Aviv_Pos_Webhook {
 						$new_subtotal = $new_total_with_tax;
 						$new_tax = 0;
 					}
-					
-					$found_item->set_subtotal( $new_subtotal );
-					$found_item->set_total( $new_subtotal );
-					$found_item->set_subtotal_tax( $new_tax );
-					$found_item->set_total_tax( $new_tax );
 				} elseif ( $quantity_changed ) {
 					// Only quantity changed - multiply original unit price by new quantity
 					// This ensures the total increases proportionally, not the unit price decreases
 					$new_subtotal = $price_per_unit_subtotal * $new_count;
 					$new_tax = $price_per_unit_tax * $new_count;
-					
-					$found_item->set_subtotal( $new_subtotal );
-					$found_item->set_total( $new_subtotal );
-					$found_item->set_subtotal_tax( $new_tax );
-					$found_item->set_total_tax( $new_tax );
+				} else {
+					// No changes needed
+					continue;
 				}
+				
+				// Update subtotal and tax FIRST (before quantity)
+				// This prevents WooCommerce from recalculating unit price incorrectly
+				$found_item->set_subtotal( $new_subtotal );
+				$found_item->set_total( $new_subtotal );
+				$found_item->set_subtotal_tax( $new_tax );
+				$found_item->set_total_tax( $new_tax );
+				
+				// Now update quantity AFTER setting subtotal
+				// This way WooCommerce won't recalculate unit price based on old subtotal
+				$found_item->set_quantity( $new_count );
 				
 				$found_item->save();
 				$updated_count++;
@@ -410,6 +420,11 @@ class OC_Aviv_Pos_Webhook {
 				sprintf( 'Aviv POS Webhook: Order %s items updated (%d items changed)', $order->get_order_number(), $updated_count ),
 				[ 'source' => 'oc-aviv-pos-webhook', 'order_id' => $order->get_id() ]
 			);
+		}
+		
+		// Restore removed hooks
+		foreach ( $removed_hooks as $hook ) {
+			add_action( $hook[0], $hook[1], $hook[2] );
 		}
 		
 		return $updated_count;
