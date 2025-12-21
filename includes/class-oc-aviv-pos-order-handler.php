@@ -298,16 +298,15 @@ class OC_Aviv_Pos_Order_Handler {
 			];
 		}
 
-		// PREPAID mode: will be charged at POS with token, send as PREPAID payment type.
-		$token = $order->get_meta( '_CardcomToken' ) ?: $order->get_meta( '_CardcomTokenId' );
+		// PREPAID mode: will be charged at POS with token, send as POSTPAID payment type.
+		$token = get_post_meta( $order->get_id(), 'CardcomToken', true );
 		$card  = $token ? [ 'token' => $token ] : null;
 
 		return [
 			[
-				'paymentType' => 'PREPAID',
-				'amount'      => $amount,
+				'paymentType' => 'POSTPAID',
+				'amount'      => $amount, 
 				'card'        => $card,
-				'prepaid'     => false, // Will be charged at POS
 			],
 		];
 	}
