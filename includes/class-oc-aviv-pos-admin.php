@@ -665,9 +665,18 @@ class OC_Aviv_Pos_Admin {
 						<td>
 							<details>
 								<summary style="cursor: pointer; color: #2271b1;"><?php esc_html_e( 'הצג פרטים', 'oc-aviv-pos' ); ?></summary>
-								<pre style="background: #f0f0f1; padding: 10px; margin-top: 10px; border-radius: 4px; overflow-x: auto; font-size: 12px;"><?php echo esc_html( wp_json_encode( $data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE ) ); ?></pre>
+								<div style="margin-top: 10px;">
+									<strong style="display: block; margin-bottom: 5px; color: #1d2327;"><?php esc_html_e( 'בקשה נכנסת:', 'oc-aviv-pos' ); ?></strong>
+									<pre style="background: #f0f0f1; padding: 10px; margin-top: 5px; border-radius: 4px; overflow-x: auto; font-size: 12px;"><?php echo esc_html( wp_json_encode( $data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE ) ); ?></pre>
+								</div>
+								<?php if ( ! empty( $log['response'] ) ) : ?>
+									<div style="margin-top: 15px;">
+										<strong style="display: block; margin-bottom: 5px; color: #1d2327;"><?php esc_html_e( 'תשובה שנשלחה:', 'oc-aviv-pos' ); ?></strong>
+										<pre style="background: #e7f5e7; padding: 10px; margin-top: 5px; border-radius: 4px; overflow-x: auto; font-size: 12px; border: 1px solid #c3e6c3;"><?php echo esc_html( wp_json_encode( $log['response'], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE ) ); ?></pre>
+									</div>
+								<?php endif; ?>
 								<?php if ( ! empty( $log['ip'] ) ) : ?>
-									<p style="margin: 5px 0; font-size: 11px; color: #666;">
+									<p style="margin: 10px 0 5px 0; font-size: 11px; color: #666;">
 										<strong><?php esc_html_e( 'IP:', 'oc-aviv-pos' ); ?></strong> <?php echo esc_html( $log['ip'] ); ?>
 									</p>
 								<?php endif; ?>

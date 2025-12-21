@@ -103,16 +103,25 @@ class OC_Aviv_Pos_Webhook {
 		$logger = wc_get_logger();
 		$logger->info( 'Aviv POS Webhook received: ' . wp_json_encode( $data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE ), [ 'source' => 'oc-aviv-pos-webhook' ] );
 
-		// Save webhook call to debug log
-		self::log_webhook_call( $data );
+		// Prepare response data (will be set later)
+		$response_data = null;
 
 		// Validate required fields
 		if ( empty( $data['shareToken'] ) ) {
 			$logger->warning( 'Aviv POS Webhook: Missing required field (shareToken)', [ 'source' => 'oc-aviv-pos-webhook' ] );
 			
-			// Log error call
 			$error_data = array_merge( $data, [ '_error' => 'Missing required field: shareToken' ] );
-			self::log_webhook_call( $error_data );
+			
+			// Prepare error response for logging
+			$error_response_for_log = null;
+			if ( $request instanceof WP_REST_Request ) {
+				$error_response_for_log = [ 'error' => 'Missing required field: shareToken' ];
+			} else {
+				$error_response_for_log = [ 'success' => false, 'data' => [ 'message' => 'Missing required field: shareToken' ] ];
+			}
+			
+			// Log error call with response
+			self::log_webhook_call( $error_data, $error_response_for_log );
 			
 			if ( $request instanceof WP_REST_Request ) {
 				return new WP_REST_Response( [ 'error' => 'Missing required field: shareToken' ], 400 );
@@ -129,9 +138,18 @@ class OC_Aviv_Pos_Webhook {
 		if ( ! $order ) {
 			$logger->warning( 'Aviv POS Webhook: Order not found for shareToken: ' . $share_token, [ 'source' => 'oc-aviv-pos-webhook' ] );
 			
-			// Log error call
 			$error_data = array_merge( $data, [ '_error' => 'Order not found', '_shareToken' => $share_token ] );
-			self::log_webhook_call( $error_data );
+			
+			// Prepare error response for logging
+			$error_response_for_log = null;
+			if ( $request instanceof WP_REST_Request ) {
+				$error_response_for_log = [ 'error' => 'Order not found' ];
+			} else {
+				$error_response_for_log = [ 'success' => false, 'data' => [ 'message' => 'Order not found' ] ];
+			}
+			
+			// Log error call with response
+			self::log_webhook_call( $error_data, $error_response_for_log );
 			
 			if ( $request instanceof WP_REST_Request ) {
 				return new WP_REST_Response( [ 'error' => 'Order not found' ], 404 );
@@ -153,12 +171,36 @@ class OC_Aviv_Pos_Webhook {
 		} else {
 			$logger->warning( 'Aviv POS Webhook: Unknown webhook type (no type or items)', [ 'source' => 'oc-aviv-pos-webhook', 'order_id' => $order->get_id() ] );
 			
+			// Prepare error response for logging
+			$error_response_for_log = null;
+			if ( $request instanceof WP_REST_Request ) {
+				$error_response_for_log = [ 'error' => 'Unknown webhook type' ];
+			} else {
+				$error_response_for_log = [ 'success' => false, 'data' => [ 'message' => 'Unknown webhook type' ] ];
+			}
+			
+			// Log error call with response
+			self::log_webhook_call( $data, $error_response_for_log );
+			
 			if ( $request instanceof WP_REST_Request ) {
 				return new WP_REST_Response( [ 'error' => 'Unknown webhook type' ], 400 );
 			}
 			wp_send_json_error( [ 'message' => 'Unknown webhook type' ], 400 );
 			return;
 		}
+
+		// Prepare response for logging
+		// For REST API: response is the data array
+		// For wp_send_json_success: response is { success: true, data: ... }
+		$response_for_log = null;
+		if ( $request instanceof WP_REST_Request ) {
+			$response_for_log = $response_data;
+		} else {
+			$response_for_log = [ 'success' => true, 'data' => $response_data ];
+		}
+
+		// Save webhook call to debug log with response
+		self::log_webhook_call( $data, $response_for_log );
 
 		// Return success response
 		if ( $request instanceof WP_REST_Request ) {
@@ -327,12 +369,12 @@ class OC_Aviv_Pos_Webhook {
 			}
 			
 			if ( $quantity_changed || $price_changed ) {
-				// Calculate price per unit BEFORE updating quantity
+				// Calculate price per unit BEFORE updating anything
 				// This preserves the original unit price
 				$price_per_unit_subtotal = $current_subtotal / max( $current_quantity, 0.001 );
 				$price_per_unit_tax = $current_subtotal_tax / max( $current_quantity, 0.001 );
 				
-				// Calculate new subtotal and tax BEFORE updating quantity
+				// Calculate new subtotal and tax based on new quantity
 				// This ensures the unit price stays the same
 				if ( $item_price_agorot !== null ) {
 					// Price in agorot is the total line price (subtotal + tax)
@@ -365,18 +407,54 @@ class OC_Aviv_Pos_Webhook {
 					continue;
 				}
 				
-				// Update subtotal and tax FIRST (before quantity)
-				// This prevents WooCommerce from recalculating unit price incorrectly
+				// CRITICAL: We need to update subtotal BEFORE quantity to preserve unit price
+				// WooCommerce calculates unit price as subtotal/quantity
+				// If quantity is 1 and subtotal is 1, unit price = 1
+				// If we change quantity to 6, we need subtotal to be 6 BEFORE setting quantity
+				// So: set subtotal to 6, then set quantity to 6, then unit price = 6/6 = 1 (preserved!)
+				
+				// First, update subtotal and tax (this sets the total line price)
 				$found_item->set_subtotal( $new_subtotal );
 				$found_item->set_total( $new_subtotal );
 				$found_item->set_subtotal_tax( $new_tax );
 				$found_item->set_total_tax( $new_tax );
 				
-				// Now update quantity AFTER setting subtotal
-				// This way WooCommerce won't recalculate unit price based on old subtotal
+				// Then update quantity (WooCommerce will calculate unit price = new_subtotal / new_quantity)
 				$found_item->set_quantity( $new_count );
 				
+				// Save the item - this commits both changes together
 				$found_item->save();
+				
+				// Verify the unit price is correct after save
+				// If WooCommerce recalculated it incorrectly, fix it
+				$saved_subtotal = $found_item->get_subtotal();
+				$saved_quantity = $found_item->get_quantity();
+				$actual_unit_price = $saved_quantity > 0 ? $saved_subtotal / $saved_quantity : 0;
+				$expected_unit_price = $price_per_unit_subtotal;
+				
+				// If unit price was recalculated incorrectly, fix it
+				if ( abs( $actual_unit_price - $expected_unit_price ) > 0.01 ) {
+					// Recalculate subtotal based on expected unit price
+					$corrected_subtotal = $expected_unit_price * $saved_quantity;
+					$corrected_tax = $price_per_unit_tax * $saved_quantity;
+					
+					$found_item->set_subtotal( $corrected_subtotal );
+					$found_item->set_total( $corrected_subtotal );
+					$found_item->set_subtotal_tax( $corrected_tax );
+					$found_item->set_total_tax( $corrected_tax );
+					$found_item->save();
+					
+					$logger->warning( 
+						sprintf( 'Aviv POS Webhook: Corrected unit price for item %s in order %s (was %s, should be %s)', 
+							$item_id, 
+							$order->get_order_number(),
+							$actual_unit_price,
+							$expected_unit_price
+						),
+						[ 'source' => 'oc-aviv-pos-webhook', 'order_id' => $order->get_id() ]
+					);
+				}
+				
 				$updated_count++;
 				
 				$logger->info( 
@@ -450,15 +528,17 @@ class OC_Aviv_Pos_Webhook {
 	/**
 	 * Log webhook call for debugging.
 	 *
-	 * @param array $data Webhook data.
+	 * @param array      $data     Webhook data (incoming request).
+	 * @param array|null $response Response data (sent back to client).
 	 */
-	private static function log_webhook_call( array $data ): void {
+	private static function log_webhook_call( array $data, ?array $response = null ): void {
 		$logs = get_option( 'oc_aviv_pos_webhook_logs', [] );
 		
 		$log_entry = [
 			'timestamp'  => current_time( 'mysql' ),
 			'timestamp_gmt' => current_time( 'mysql', true ),
 			'data'       => $data,
+			'response'   => $response,
 			'ip'         => $_SERVER['REMOTE_ADDR'] ?? '',
 			'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? '',
 		];
