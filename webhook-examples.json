@@ -1,0 +1,246 @@
+{
+  "examples": {
+    "status_update_accepted": {
+      "description": "עדכון סטטוס הזמנה ל-ACCEPTED",
+      "url": "POST https://yoursite.com/wp-json/ocaviv/v1/getstatus",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": {
+        "type": "ACCEPTED",
+        "shareToken": "17175",
+        "data": "10131796",
+        "timeStatus": "2025-12-21T08:12:32.055Z"
+      },
+      "expected_response": {
+        "error": 0,
+        "errorMsg": "",
+        "shareToken": "17175",
+        "amount": 13990,
+        "proofToken": "",
+        "checkoutPayment": {
+          "checkoutType": "CASH"
+        }
+      }
+    },
+    "status_update_committed": {
+      "description": "עדכון סטטוס הזמנה ל-COMMITTED",
+      "url": "POST https://yoursite.com/wp-json/ocaviv/v1/getstatus",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": {
+        "type": "COMMITTED",
+        "shareToken": "17175",
+        "data": "10131796",
+        "timeStatus": "2025-12-21T10:30:00.000Z"
+      }
+    },
+    "items_update_quantity_only": {
+      "description": "עדכון כמות פריט (ללא שינוי מחיר) - משנה כמות מ-1 ל-6",
+      "url": "POST https://yoursite.com/wp-json/ocaviv/v1/getstatus",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": {
+        "shareToken": "17175",
+        "items": [
+          {
+            "id": "500500",
+            "desc": "מוצר דמה 500 גרם (דוגמה)",
+            "price": 100,
+            "itemType": "PRODUCT",
+            "variations": null,
+            "count": 6,
+            "orderedCount": 1
+          }
+        ],
+        "total": 600
+      },
+      "expected_response": {
+        "error": 0,
+        "errorMsg": "",
+        "shareToken": "17175",
+        "amount": 600,
+        "proofToken": "",
+        "checkoutPayment": {
+          "checkoutType": "CASH"
+        }
+      },
+      "notes": "המחיר ליחידה צריך להישאר 1 ₪, הסך הכל צריך להיות 6 ₪"
+    },
+    "items_update_quantity_and_price": {
+      "description": "עדכון כמות + מחיר כולל של פריט",
+      "url": "POST https://yoursite.com/wp-json/ocaviv/v1/getstatus",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": {
+        "shareToken": "17175",
+        "items": [
+          {
+            "id": "500500",
+            "desc": "מוצר דמה 500 גרם (דוגמה)",
+            "price": 20000,
+            "itemType": "PRODUCT",
+            "variations": null,
+            "count": 4,
+            "orderedCount": 1
+          }
+        ],
+        "total": 80000
+      },
+      "expected_response": {
+        "error": 0,
+        "errorMsg": "",
+        "shareToken": "17175",
+        "amount": 80000,
+        "proofToken": "",
+        "checkoutPayment": {
+          "checkoutType": "CASH"
+        }
+      },
+      "notes": "מחיר כולל השורה: 200 ₪ (20000 אגורות), כמות: 4"
+    },
+    "items_update_multiple_items": {
+      "description": "עדכון מספר פריטים בו-זמנית",
+      "url": "POST https://yoursite.com/wp-json/ocaviv/v1/getstatus",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": {
+        "shareToken": "17175",
+        "items": [
+          {
+            "id": "10262",
+            "desc": "פילה שייטל",
+            "price": 38970,
+            "itemType": "PRODUCT",
+            "count": 2
+          },
+          {
+            "id": "10284",
+            "desc": "אונטריב",
+            "price": 63920,
+            "itemType": "PRODUCT",
+            "count": 8
+          }
+        ],
+        "total": 102890
+      },
+      "expected_response": {
+        "error": 0,
+        "errorMsg": "",
+        "shareToken": "17175",
+        "amount": 102890,
+        "proofToken": "",
+        "checkoutPayment": {
+          "checkoutType": "CASH"
+        }
+      }
+    },
+    "items_update_float_quantity": {
+      "description": "עדכון כמות עם ערך עשרוני (1.8 יחידות)",
+      "url": "POST https://yoursite.com/wp-json/ocaviv/v1/getstatus",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": {
+        "shareToken": "17175",
+        "items": [
+          {
+            "id": "500500",
+            "desc": "מוצר דמה 500 גרם (דוגמה)",
+            "price": 180,
+            "itemType": "PRODUCT",
+            "count": 1.8,
+            "orderedCount": 1
+          }
+        ],
+        "total": 324
+      },
+      "expected_response": {
+        "error": 0,
+        "errorMsg": "",
+        "shareToken": "17175",
+        "amount": 324,
+        "proofToken": "",
+        "checkoutPayment": {
+          "checkoutType": "CASH"
+        }
+      },
+      "notes": "תומך בכמויות עשרוניות (1.8, 2.5 וכו')"
+    },
+    "error_order_not_found": {
+      "description": "שגיאה - הזמנה לא נמצאה",
+      "url": "POST https://yoursite.com/wp-json/ocaviv/v1/getstatus",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": {
+        "shareToken": "99999"
+      },
+      "expected_response": {
+        "error": 1,
+        "errorMsg": "Order not found",
+        "shareToken": "99999",
+        "amount": 0,
+        "proofToken": "",
+        "checkoutPayment": {
+          "checkoutType": "CASH"
+        }
+      },
+      "expected_status_code": 404
+    },
+    "error_missing_shareToken": {
+      "description": "שגיאה - שדה shareToken חסר",
+      "url": "POST https://yoursite.com/wp-json/ocaviv/v1/getstatus",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": {
+        "items": [
+          {
+            "id": "500500",
+            "count": 2
+          }
+        ]
+      },
+      "expected_response": {
+        "error": 1,
+        "errorMsg": "Missing required field: shareToken",
+        "shareToken": "",
+        "amount": 0,
+        "proofToken": "",
+        "checkoutPayment": {
+          "checkoutType": "CASH"
+        }
+      },
+      "expected_status_code": 400
+    }
+  },
+  "instructions": {
+    "postman_setup": {
+      "method": "POST",
+      "url_template": "https://yoursite.com/wp-json/ocaviv/v1/getstatus",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body_type": "raw",
+      "body_format": "JSON"
+    },
+    "how_to_use": [
+      "1. פתח Postman",
+      "2. בחר Method: POST",
+      "3. הדבק את ה-URL (החלף yoursite.com בכתובת האתר שלך)",
+      "4. הוסף Header: Content-Type: application/json",
+      "5. בחר Body → raw → JSON",
+      "6. העתק את ה-body מהדוגמה המתאימה",
+      "7. החלף shareToken במספר הזמנה קיים",
+      "8. החלף id ב-SKU או Product ID של מוצר קיים בהזמנה",
+      "9. לחץ Send",
+      "10. בדוק את התשובה ב-Postman ואת הלוג ב-WooCommerce → Aviv POS → לוג Webhook"
+    ]
+  }
+}
+

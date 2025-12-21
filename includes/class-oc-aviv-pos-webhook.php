@@ -117,15 +117,15 @@ class OC_Aviv_Pos_Webhook {
 			
 			$error_data = array_merge( $data, [ '_error' => 'Missing required field: shareToken' ] );
 			
-			// Build error response in Aviv POS format
+			// Build error response in Aviv POS format - exact format as specified
 			$error_response = [
-				'error'         => 1,
-				'errorMsg'      => 'Missing required field: shareToken',
-				'shareToken'    => '',
-				'amount'        => 0,
-				'proofToken'    => '',
+				'error'         => (int) 1, // Ensure integer type
+				'errorMsg'      => (string) 'Missing required field: shareToken', // Ensure string type
+				'shareToken'    => (string) '', // Ensure string type
+				'amount'        => (int) 0, // Ensure integer type
+				'proofToken'    => (string) '', // Ensure string type
 				'checkoutPayment' => [
-					'checkoutType' => 'CASH',
+					'checkoutType' => (string) 'CASH', // Ensure string type
 				],
 			];
 			
@@ -153,15 +153,15 @@ class OC_Aviv_Pos_Webhook {
 			
 			$error_data = array_merge( $data, [ '_error' => 'Order not found', '_shareToken' => $share_token ] );
 			
-			// Build error response in Aviv POS format
+			// Build error response in Aviv POS format - exact format as specified
 			$error_response = [
-				'error'         => 1,
-				'errorMsg'      => 'Order not found',
-				'shareToken'    => $share_token,
-				'amount'        => 0,
-				'proofToken'    => '',
+				'error'         => (int) 1, // Ensure integer type
+				'errorMsg'      => (string) 'Order not found', // Ensure string type
+				'shareToken'    => (string) $share_token, // Ensure string type
+				'amount'        => (int) 0, // Ensure integer type
+				'proofToken'    => (string) '', // Ensure string type
 				'checkoutPayment' => [
-					'checkoutType' => 'CASH',
+					'checkoutType' => (string) 'CASH', // Ensure string type
 				],
 			];
 			
@@ -195,7 +195,7 @@ class OC_Aviv_Pos_Webhook {
 			$error_msg = 'Unknown webhook type';
 		}
 
-		// Build response in Aviv POS format
+		// Build response in Aviv POS format - exact format as specified
 		$settings = OC_Aviv_Pos_Admin::get_settings();
 		$payments = OC_Aviv_Pos_Order_Handler::map_payments( $order, $settings );
 		$checkout_type = 'CASH'; // Default
@@ -211,14 +211,16 @@ class OC_Aviv_Pos_Webhook {
 		// Get proofToken if available (e.g., CardcomToken)
 		$proof_token = get_post_meta( $order->get_id(), 'CardcomToken', true ) ?: '';
 		
+		// Build response in exact format as specified by Aviv POS
+		// Order matters - error, errorMsg, shareToken, amount, proofToken, checkoutPayment
 		$response_data = [
-			'error'         => $success ? 0 : 1,
-			'errorMsg'      => $error_msg ?: '',
-			'shareToken'    => $share_token,
-			'amount'        => $amount,
-			'proofToken'    => $proof_token,
+			'error'         => (int) ( $success ? 0 : 1 ), // Ensure integer type
+			'errorMsg'      => (string) ( $error_msg ?: '' ), // Ensure string type
+			'shareToken'    => (string) $share_token, // Ensure string type
+			'amount'        => (int) $amount, // Ensure integer type (in agorot)
+			'proofToken'    => (string) $proof_token, // Ensure string type
 			'checkoutPayment' => [
-				'checkoutType' => $checkout_type,
+				'checkoutType' => (string) $checkout_type, // Ensure string type (CASH or POSTPAID)
 			],
 		];
 
