@@ -215,12 +215,13 @@ class OC_Aviv_Pos_Webhook {
 		// Order matters - error, errorMsg, shareToken, amount, proofToken, checkoutPayment
 		$response_data = [
 			'error'         => (int) ( $success ? 0 : 1 ), // Ensure integer type
-			'errorMsg'      => (string) ( $error_msg ?: '' ), // Ensure string type
+			'errorMsg'      => 'sadaasdsa', // Ensure string type
 			'shareToken'    => (string) $share_token, // Ensure string type
 			'amount'        => (int) $amount, // Ensure integer type (in agorot)
 			'proofToken'    => (string) $proof_token, // Ensure string type
 			'checkoutPayment' => [
-				'checkoutType' => (string) $checkout_type, // Ensure string type (CASH or POSTPAID)
+//				'checkoutType' => (string) $checkout_type, // Ensure string type (CASH or POSTPAID)
+				'checkoutType' => (string) 'CREDIT_CARD', // Ensure string type (CASH or POSTPAID)
 			],
 		];
 
@@ -517,9 +518,9 @@ class OC_Aviv_Pos_Webhook {
 			
 			$order_total = $order_subtotal + $order_tax + $order->get_shipping_total() - $order->get_total_discount();
 			
-			$order->set_subtotal( $order_subtotal );
-			$order->set_total( $order_total );
-			$order->set_total_tax( $order_tax );
+//			$order->set_subtotal( $order_subtotal );
+//			$order->set_total( $order_total );
+//			$order->set_total_tax( $order_tax );
 			
 			$order->add_order_note( 
 				sprintf( __( 'עודכנו %d פריטים מ-Aviv POS', 'oc-aviv-pos' ), $updated_count )

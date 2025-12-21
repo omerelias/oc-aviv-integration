@@ -72,10 +72,23 @@ class OC_Aviv_Pos_Order_Handler {
 				$desc .= ' ' . $cutting_shape;
 			}
 
+            $qty = (float) $item->get_quantity();
+            $total = (float) ( $item->get_total() + $item->get_total_tax() );
+
+            if ( $qty >= 1 ) {
+                // מחיר ליחידה רגילה
+                $unit_price = $total / $qty;
+            } else {
+                // כמות שברית (למשל 0.25 ק"ג)
+                $unit_price = $total * ( 1 / $qty );
+            }
+
+
+
 			$items[] = [
 				'id'            => $id,
 				'desc'          => $desc,
-				'price'         => (int) round( ( $item->get_total() + $item->get_total_tax() ) * 100 ),
+                'price' =>  round( $unit_price * 100 ),
 				'itemType'      => 'PRODUCT',
 				'variations'    => [], // not used in V1; we flatten to comment.
 				'comment'       => self::build_item_comment( $item, $settings ),
