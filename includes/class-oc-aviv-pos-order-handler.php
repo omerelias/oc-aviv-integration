@@ -151,12 +151,9 @@ class OC_Aviv_Pos_Order_Handler {
 			'checkoutWebhook'   => $checkout_webhook,
 			'deliveryCharge'    => (int) round( $order->get_shipping_total() * 100 ),
 			'tip'               => 0,
+			'servingType'       => 'DELIVERY', // Always DELIVERY (API bug workaround)
 		];
 
-		// Only add servingType for delivery (not for pickup/takeout)
-		if ( ! $is_pickup ) {
-			$payload['servingType'] = 'DELIVERY';
-		}
 		return $payload;
 	}
 
