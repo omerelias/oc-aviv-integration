@@ -14,6 +14,7 @@ class OC_Aviv_Pos_Admin {
 		add_action( 'admin_enqueue_scripts', [ __CLASS__, 'enqueue_assets' ] );
 		add_action( 'wp_ajax_oc_aviv_pos_debug', [ __CLASS__, 'ajax_debug_payload' ] );
 		add_action( 'wp_ajax_oc_aviv_pos_send_order', [ __CLASS__, 'ajax_send_order' ] );
+		add_action( 'wp_ajax_oc_aviv_pos_clear_webhook_logs', [ __CLASS__, 'ajax_clear_webhook_logs' ] );
 	}
 
 	public static function add_menu(): void {
@@ -74,6 +75,7 @@ class OC_Aviv_Pos_Admin {
 			'api'      => __( 'חיבור API וטריגרים', 'oc-aviv-pos' ),
 			'comment'  => __( 'מיפויים', 'oc-aviv-pos' ),
 			'payments' => __( 'מיפוי תשלומים', 'oc-aviv-pos' ),
+			'webhooks' => __( 'לוג Webhook', 'oc-aviv-pos' ),
 		];
 
 		?>
@@ -86,23 +88,27 @@ class OC_Aviv_Pos_Admin {
 					</a>
 				<?php endforeach; ?>
 			</nav>
-			<form method="post">
-				<?php wp_nonce_field( 'oc_aviv_pos_save', 'oc_aviv_pos_nonce' ); ?>
-				<?php
-				switch ( $tab ) {
-					case 'comment':
-						self::render_comment_tab( $settings );
-						break;
-					case 'payments':
-						self::render_payments_tab( $settings );
-						break;
-					case 'api':
-					default:
-						self::render_api_tab( $settings );
-				}
-				?>
-				<?php submit_button(); ?>
-			</form>
+			<?php if ( $tab === 'webhooks' ) : ?>
+				<?php self::render_webhooks_tab(); ?>
+			<?php else : ?>
+				<form method="post">
+					<?php wp_nonce_field( 'oc_aviv_pos_save', 'oc_aviv_pos_nonce' ); ?>
+					<?php
+					switch ( $tab ) {
+						case 'comment':
+							self::render_comment_tab( $settings );
+							break;
+						case 'payments':
+							self::render_payments_tab( $settings );
+							break;
+						case 'api':
+						default:
+							self::render_api_tab( $settings );
+					}
+					?>
+					<?php submit_button(); ?>
+				</form>
+			<?php endif; ?>
 		</div>
 		<?php
 	}
@@ -540,6 +546,154 @@ class OC_Aviv_Pos_Admin {
 				'response' => $result,
 			]
 		);
+	}
+
+	/**
+	 * Render webhooks debug tab.
+	 */
+	private static function render_webhooks_tab(): void {
+		$logs = OC_Aviv_Pos_Webhook::get_webhook_logs();
+		$webhook_url = OC_Aviv_Pos_Webhook::get_webhook_url();
+		?>
+		<h2><?php esc_html_e( 'Webhook Endpoint', 'oc-aviv-pos' ); ?></h2>
+		<table class="form-table">
+			<tr>
+				<th scope="row"><?php esc_html_e( 'Webhook URL', 'oc-aviv-pos' ); ?></th>
+				<td>
+					<code style="background: #f0f0f1; padding: 8px 12px; display: inline-block; border-radius: 4px;"><?php echo esc_url( $webhook_url ); ?></code>
+					<p class="description"><?php esc_html_e( 'קישור זה נשלח ב-checkoutWebhook כאשר יש POSTPAID payment. Aviv POS יקרא לקישור זה עם עדכוני סטטוס.', 'oc-aviv-pos' ); ?></p>
+				</td>
+			</tr>
+		</table>
+		<hr />
+		<h2><?php esc_html_e( 'לוג עדכוני Webhook', 'oc-aviv-pos' ); ?></h2>
+		<p class="description"><?php esc_html_e( 'כל עדכוני הסטטוס שהתקבלו מהקופה (Aviv POS). הלוג שומר את 200 העדכונים האחרונים.', 'oc-aviv-pos' ); ?></p>
+		<p>
+			<button type="button" class="button" id="oc_aviv_clear_webhook_logs"><?php esc_html_e( 'נקה לוג', 'oc-aviv-pos' ); ?></button>
+			<input type="hidden" id="oc_aviv_clear_logs_nonce" value="<?php echo esc_attr( wp_create_nonce( 'oc_aviv_pos_clear_webhook_logs' ) ); ?>" />
+		</p>
+		<?php if ( empty( $logs ) ) : ?>
+			<p><?php esc_html_e( 'אין עדכונים בלוג עדיין.', 'oc-aviv-pos' ); ?></p>
+		<?php else : ?>
+			<table class="widefat fixed striped oc-aviv-pos-webhook-logs">
+				<thead>
+				<tr>
+					<th style="width: 150px;"><?php esc_html_e( 'תאריך ושעה', 'oc-aviv-pos' ); ?></th>
+					<th style="width: 100px;"><?php esc_html_e( 'מספר הזמנה', 'oc-aviv-pos' ); ?></th>
+					<th style="width: 120px;"><?php esc_html_e( 'סטטוס Aviv', 'oc-aviv-pos' ); ?></th>
+					<th style="width: 100px;"><?php esc_html_e( 'Order ID', 'oc-aviv-pos' ); ?></th>
+					<th><?php esc_html_e( 'נתונים', 'oc-aviv-pos' ); ?></th>
+				</tr>
+				</thead>
+				<tbody>
+				<?php foreach ( $logs as $log ) : ?>
+					<?php
+					$data = $log['data'] ?? [];
+					$share_token = $data['shareToken'] ?? $data['_shareToken'] ?? '';
+					$status_type = $data['type'] ?? '';
+					$has_error = ! empty( $data['_error'] );
+					$order_data = $data['data'] ?? '';
+					$time_status = $data['timeStatus'] ?? '';
+					
+					// Try to find order
+					$order = null;
+					$order_id = '';
+					if ( $share_token ) {
+						$order = wc_get_order( $share_token );
+						
+						// If not found by ID, try to find by order number
+						if ( ! $order ) {
+							$orders = wc_get_orders( [
+								'limit' => 1,
+								'meta_key' => '_order_number',
+								'meta_value' => $share_token,
+							] );
+							if ( ! empty( $orders ) ) {
+								$order = $orders[0];
+							}
+						}
+						
+						// If still not found, try by order number directly
+						if ( ! $order ) {
+							$orders = wc_get_orders( [
+								'limit' => 100,
+								'return' => 'ids',
+							] );
+							foreach ( $orders as $oid ) {
+								$order_obj = wc_get_order( $oid );
+								if ( $order_obj && (string) $order_obj->get_order_number() === $share_token ) {
+									$order = $order_obj;
+									break;
+								}
+							}
+						}
+						
+						if ( $order ) {
+							$order_id = $order->get_id();
+						}
+					}
+					?>
+					<tr <?php echo $has_error ? 'style="background: #fef2f2;"' : ''; ?>>
+						<td>
+							<?php echo esc_html( date_i18n( 'd/m/Y H:i:s', strtotime( $log['timestamp'] ) ) ); ?>
+						</td>
+						<td>
+							<strong><?php echo esc_html( $share_token ?: '-' ); ?></strong>
+						</td>
+						<td>
+							<?php if ( $has_error ) : ?>
+								<span class="oc-aviv-status-badge" style="background: #f8d7da; color: #842029;">
+									<?php echo esc_html( $data['_error'] ?? 'ERROR' ); ?>
+								</span>
+							<?php elseif ( $status_type ) : ?>
+								<span class="oc-aviv-status-badge oc-aviv-status-<?php echo esc_attr( strtolower( $status_type ) ); ?>">
+									<?php echo esc_html( $status_type ); ?>
+								</span>
+							<?php else : ?>
+								<span style="color: #999;">-</span>
+							<?php endif; ?>
+						</td>
+						<td>
+							<?php if ( $order_id ) : ?>
+								<a href="<?php echo esc_url( admin_url( 'post.php?post=' . $order_id . '&action=edit' ) ); ?>" target="_blank">
+									<?php echo esc_html( $order_id ); ?>
+								</a>
+							<?php else : ?>
+								<span style="color: #999;"><?php esc_html_e( 'לא נמצא', 'oc-aviv-pos' ); ?></span>
+							<?php endif; ?>
+						</td>
+						<td>
+							<details>
+								<summary style="cursor: pointer; color: #2271b1;"><?php esc_html_e( 'הצג פרטים', 'oc-aviv-pos' ); ?></summary>
+								<pre style="background: #f0f0f1; padding: 10px; margin-top: 10px; border-radius: 4px; overflow-x: auto; font-size: 12px;"><?php echo esc_html( wp_json_encode( $data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE ) ); ?></pre>
+								<?php if ( ! empty( $log['ip'] ) ) : ?>
+									<p style="margin: 5px 0; font-size: 11px; color: #666;">
+										<strong><?php esc_html_e( 'IP:', 'oc-aviv-pos' ); ?></strong> <?php echo esc_html( $log['ip'] ); ?>
+									</p>
+								<?php endif; ?>
+							</details>
+						</td>
+					</tr>
+				<?php endforeach; ?>
+				</tbody>
+			</table>
+		<?php endif; ?>
+		<?php
+	}
+
+	/**
+	 * AJAX handler to clear webhook logs.
+	 */
+	public static function ajax_clear_webhook_logs(): void {
+		check_ajax_referer( 'oc_aviv_pos_clear_webhook_logs', 'nonce' );
+
+		if ( ! current_user_can( 'manage_woocommerce' ) ) {
+			wp_send_json_error( [ 'message' => __( 'Permission denied', 'oc-aviv-pos' ) ], 403 );
+		}
+
+		OC_Aviv_Pos_Webhook::clear_webhook_logs();
+
+		wp_send_json_success( [ 'message' => __( 'Webhook logs cleared', 'oc-aviv-pos' ) ] );
 	}
 
 }

@@ -278,6 +278,83 @@
 	border-top: 1px solid #dcdcde;
 }
 
+/* Webhook logs table */
+.oc-aviv-pos .oc-aviv-pos-webhook-logs {
+	border: 1px solid #c3c4c7;
+	border-radius: 4px;
+	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+	background: #fff;
+	margin-top: 15px;
+}
+
+.oc-aviv-pos .oc-aviv-pos-webhook-logs thead {
+	background: #f6f7f7;
+	border-bottom: 2px solid #c3c4c7;
+}
+
+.oc-aviv-pos .oc-aviv-pos-webhook-logs th {
+	padding: 12px 15px;
+	font-weight: 600;
+	color: #1d2327;
+	text-align: right;
+}
+
+.oc-aviv-pos .oc-aviv-pos-webhook-logs td {
+	padding: 15px;
+	border-top: 1px solid #dcdcde;
+	vertical-align: middle;
+}
+
+.oc-aviv-pos .oc-aviv-pos-webhook-logs tbody tr:hover {
+	background: #f9f9f9;
+}
+
+.oc-aviv-pos .oc-aviv-pos-webhook-logs pre {
+	background: #f6f7f7;
+	border: 1px solid #dcdcde;
+	border-radius: 3px;
+	padding: 12px;
+	max-height: 300px;
+	overflow: auto;
+	white-space: pre-wrap;
+	word-wrap: break-word;
+	font-family: 'Courier New', Consolas, monospace;
+	font-size: 11px;
+	line-height: 1.5;
+	color: #1d2327;
+	margin: 0;
+}
+
+/* Status badges */
+.oc-aviv-pos .oc-aviv-status-badge {
+	display: inline-block;
+	padding: 4px 10px;
+	border-radius: 12px;
+	font-size: 12px;
+	font-weight: 600;
+	text-transform: uppercase;
+}
+
+.oc-aviv-pos .oc-aviv-status-badge.oc-aviv-status-open {
+	background: #f0f0f1;
+	color: #50575e;
+}
+
+.oc-aviv-pos .oc-aviv-status-badge.oc-aviv-status-accepted {
+	background: #d1e7dd;
+	color: #0f5132;
+}
+
+.oc-aviv-pos .oc-aviv-status-badge.oc-aviv-status-committed {
+	background: #d1e7dd;
+	color: #0f5132;
+}
+
+.oc-aviv-pos .oc-aviv-status-badge.oc-aviv-status-cancelled {
+	background: #f8d7da;
+	color: #842029;
+}
+
 /* Responsive */
 @media screen and (max-width: 782px) {
 	.oc-aviv-pos .oc-aviv-debug-panels {

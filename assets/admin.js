@@ -127,6 +127,33 @@
 				alert('Failed to send order: ' + err);
 			});
 		});
+
+		// Clear webhook logs button
+		$('#oc_aviv_clear_webhook_logs').on('click', function(e){
+			e.preventDefault();
+			if(!confirm('האם אתה בטוח שברצונך לנקות את כל לוג ה-Webhook?')){
+				return;
+			}
+			var nonce = $('#oc_aviv_clear_logs_nonce').val();
+			var $button = $(this);
+			var originalText = $button.text();
+			$button.prop('disabled', true).text('מנקה...');
+			$.post(ajaxurl, {
+				action: 'oc_aviv_pos_clear_webhook_logs',
+				nonce: nonce
+			}).done(function(resp){
+				if(resp && resp.success){
+					alert('הלוג נוקה בהצלחה');
+					location.reload();
+				} else {
+					alert('שגיאה בניקוי הלוג');
+					$button.prop('disabled', false).text(originalText);
+				}
+			}).fail(function(xhr){
+				alert('שגיאה בניקוי הלוג: ' + xhr.status);
+				$button.prop('disabled', false).text(originalText);
+			});
+		});
 	});
 })(jQuery);
 

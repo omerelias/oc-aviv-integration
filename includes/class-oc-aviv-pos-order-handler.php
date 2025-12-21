@@ -112,6 +112,21 @@ class OC_Aviv_Pos_Order_Handler {
 		$is_pickup = $delivery_mode === 'pickup';
 		$webhook_url = $settings['webhook_url'] ?? '';
 
+		// Check if we have POSTPAID payment - if so, set checkoutWebhook to our webhook endpoint
+		$has_postpaid = false;
+		foreach ( $payments as $payment ) {
+			if ( isset( $payment['paymentType'] ) && $payment['paymentType'] === 'POSTPAID' ) {
+				$has_postpaid = true;
+				break;
+			}
+		}
+
+		$checkout_webhook = $webhook_url;
+		if ( $has_postpaid ) {
+			// For POSTPAID, send our webhook endpoint URL for status updates
+			$checkout_webhook = OC_Aviv_Pos_Webhook::get_webhook_url();
+		}
+
 		$payload = [
 			'shareToken'        => (string) $order->get_order_number(),
 			'items'             => $items,
@@ -133,7 +148,7 @@ class OC_Aviv_Pos_Order_Handler {
 			'takeoutSets'       => 0,
 			'tblNo'             => 0,
 			'webhook'           => $webhook_url,
-			'checkoutWebhook'   => $webhook_url, // Use same webhook for checkout if provided
+			'checkoutWebhook'   => $checkout_webhook,
 			'deliveryCharge'    => (int) round( $order->get_shipping_total() * 100 ),
 			'tip'               => 0,
 		];
@@ -305,7 +320,7 @@ class OC_Aviv_Pos_Order_Handler {
 		return [
 			[
 				'paymentType' => 'POSTPAID',
-				'amount'      => $amount, 
+				'amount'      => $amount,
 				'card'        => $card,
 			],
 		];

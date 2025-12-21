@@ -18,6 +18,7 @@ define( 'OC_AVIV_POS_OPTION_KEY', 'oc_aviv_pos_settings' );
 require_once OC_AVIV_POS_PATH . 'includes/class-oc-aviv-pos-admin.php';
 require_once OC_AVIV_POS_PATH . 'includes/class-oc-aviv-pos-api.php';
 require_once OC_AVIV_POS_PATH . 'includes/class-oc-aviv-pos-order-handler.php';
+require_once OC_AVIV_POS_PATH . 'includes/class-oc-aviv-pos-webhook.php';
 
 // Bootstrap.
 add_action(
@@ -32,6 +33,18 @@ add_action(
 		}
 
 		OC_Aviv_Pos_Order_Handler::init();
+		OC_Aviv_Pos_Webhook::init();
 	}
 );
+
+// Flush rewrite rules on activation.
+register_activation_hook( __FILE__, static function () {
+	OC_Aviv_Pos_Webhook::add_rewrite_rules();
+	flush_rewrite_rules();
+} );
+
+// Flush rewrite rules on deactivation.
+register_deactivation_hook( __FILE__, static function () {
+	flush_rewrite_rules();
+} );
 
