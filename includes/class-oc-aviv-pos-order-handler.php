@@ -85,7 +85,6 @@ class OC_Aviv_Pos_Order_Handler {
 		}
 
 		$payments = self::map_payments( $order, $settings );
-
 		// Parse coordinates from billing_address_coords if available (format: "(lat, lng)").
 		$coords_str = $order->get_meta( '_billing_address_coords' );
 		$lat = '';
