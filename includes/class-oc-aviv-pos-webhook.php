@@ -192,7 +192,7 @@ class OC_Aviv_Pos_Webhook {
 			$updated_count = self::handle_items_update_for_order( $order, $data, $logger );
 			
 			// Mark order as completed after items update
-			$order->update_status( 'wc-completed', __( 'הזמנה הושלמה לאחר עדכון כמויות מ-Aviv POS', 'oc-aviv-pos' ) );
+			// $order->update_status( 'wc-completed', __( 'הזמנה הושלמה לאחר עדכון כמויות מ-Aviv POS', 'oc-aviv-pos' ) );
 			$logger->info( 
 				sprintf( 'Aviv POS Webhook: Order %s marked as completed after items update', $order->get_order_number() ),
 				[ 'source' => 'oc-aviv-pos-webhook', 'order_id' => $order->get_id() ]
