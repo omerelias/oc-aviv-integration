@@ -343,7 +343,7 @@ class OC_Aviv_Pos_Webhook {
 	 * @param WC_Order $order Order object.
 	 * @param array    $data  Webhook data with items.
 	 * @param WC_Log_Handler_Interface $logger Logger instance.
-	 * @return int Number of items updated.
+	 * @return int Number of items updated/added/deleted.
 	 */
 	private static function handle_items_update_for_order( WC_Order $order, array $data, $logger ): int {
 		// Temporarily remove hooks that might recalculate prices
@@ -356,7 +356,32 @@ class OC_Aviv_Pos_Webhook {
 		
 		$items = $data['items'] ?? [];
 		$updated_count = 0;
+		$added_count = 0;
+		$deleted_count = 0;
 
+		// Collect all SKUs from webhook
+		$webhook_skus = [];
+		foreach ( $items as $item_data ) {
+			$item_id = $item_data['id'] ?? '';
+			if ( ! empty( $item_id ) ) {
+				$webhook_skus[] = (string) $item_id;
+			}
+		}
+
+		// Step 1: Update existing items and collect order SKUs
+		$order_skus = [];
+		foreach ( $order->get_items() as $line_item ) {
+			$product = $line_item->get_product();
+			if ( ! $product ) {
+				continue;
+			}
+
+			// Match by SKU or product ID
+			$product_id = $product->get_sku() ?: (string) $product->get_id();
+			$order_skus[] = (string) $product_id;
+		}
+
+		// Step 2: Update existing items
 		foreach ( $items as $item_data ) {
 			$item_id = $item_data['id'] ?? '';
 			$new_count = isset( $item_data['count'] ) ? floatval( $item_data['count'] ) : null;
@@ -383,10 +408,7 @@ class OC_Aviv_Pos_Webhook {
 			}
 
 			if ( ! $found_item ) {
-				$logger->warning( 
-					sprintf( 'Aviv POS Webhook: Item %s not found in order %s', $item_id, $order->get_order_number() ),
-					[ 'source' => 'oc-aviv-pos-webhook', 'order_id' => $order->get_id() ]
-				);
+				// Item not found in order - will be added in step 3
 				continue;
 			}
 
@@ -511,32 +533,165 @@ class OC_Aviv_Pos_Webhook {
 			}
 		}
 
-		if ( $updated_count > 0 ) {
-			// Don't call calculate_totals() here - it will recalculate unit prices
-			// We've already set the correct subtotals and taxes above
-			// Just update the order totals manually
-			$order_total = 0;
-			$order_subtotal = 0;
-			$order_tax = 0;
-			
-			foreach ( $order->get_items() as $item ) {
-				$order_subtotal += $item->get_subtotal();
-				$order_tax += $item->get_subtotal_tax();
+		// Step 3: Add new items from webhook that don't exist in order
+		foreach ( $items as $item_data ) {
+			$item_id = $item_data['id'] ?? '';
+			$new_count = isset( $item_data['count'] ) ? floatval( $item_data['count'] ) : null;
+			$item_price_agorot = isset( $item_data['price'] ) ? floatval( $item_data['price'] ) : null; // Price in agorot
+
+			if ( empty( $item_id ) || $new_count === null ) {
+				continue;
 			}
+
+			// Check if item already exists in order (was updated in step 2)
+			$item_exists = false;
+			foreach ( $order->get_items() as $line_item ) {
+				$product = $line_item->get_product();
+				if ( ! $product ) {
+					continue;
+				}
+
+				$product_id = $product->get_sku() ?: (string) $product->get_id();
+				if ( (string) $product_id === (string) $item_id ) {
+					$item_exists = true;
+					break;
+				}
+			}
+
+			// If item doesn't exist, add it
+			if ( ! $item_exists ) {
+				// Find product by SKU or ID
+				$product = self::find_product_by_sku_or_id( $item_id );
+				
+				if ( ! $product ) {
+					$logger->warning( 
+						sprintf( 'Aviv POS Webhook: Product %s not found in WooCommerce, cannot add to order %s', $item_id, $order->get_order_number() ),
+						[ 'source' => 'oc-aviv-pos-webhook', 'order_id' => $order->get_id() ]
+					);
+					continue;
+				}
+
+				// Calculate price from webhook data
+				$new_total_with_tax = 0;
+				$new_subtotal = 0;
+				$new_tax = 0;
+
+				if ( $item_price_agorot !== null ) {
+					// Price in agorot is the total line price (subtotal + tax)
+					$new_total_with_tax = $item_price_agorot / 100;
+					
+					// Get tax rate from product
+					$tax_rates = WC_Tax::get_rates( $product->get_tax_class() );
+					$tax_rate = 0;
+					if ( ! empty( $tax_rates ) ) {
+						$tax_rate = array_sum( wp_list_pluck( $tax_rates, 'rate' ) );
+					}
+					
+					// Split total between subtotal and tax
+					if ( $tax_rate > 0 ) {
+						$new_subtotal = $new_total_with_tax / ( 1 + ( $tax_rate / 100 ) );
+						$new_tax = $new_total_with_tax - $new_subtotal;
+					} else {
+						$new_subtotal = $new_total_with_tax;
+						$new_tax = 0;
+					}
+				} else {
+					// No price in webhook - use product price
+					$product_price = $product->get_price();
+					$new_subtotal = $product_price * $new_count;
+					
+					// Calculate tax
+					$tax_rates = WC_Tax::get_rates( $product->get_tax_class() );
+					if ( ! empty( $tax_rates ) ) {
+						$tax_rate = array_sum( wp_list_pluck( $tax_rates, 'rate' ) );
+						$new_tax = $new_subtotal * ( $tax_rate / 100 );
+					} else {
+						$new_tax = 0;
+					}
+					$new_total_with_tax = $new_subtotal + $new_tax;
+				}
+
+				// Add product to order
+				$item_id_added = $order->add_product( $product, $new_count );
+				
+				if ( $item_id_added ) {
+					// Get the item we just added
+					$new_item = $order->get_item( $item_id_added );
+					if ( $new_item ) {
+						// Set custom prices
+						$new_item->set_subtotal( $new_subtotal );
+						$new_item->set_total( $new_subtotal );
+						$new_item->set_subtotal_tax( $new_tax );
+						$new_item->set_total_tax( $new_tax );
+						$new_item->save();
+						
+						$added_count++;
+						
+						$logger->info( 
+							sprintf( 'Aviv POS Webhook: Order %s item %s added - quantity: %s, price: %s', 
+								$order->get_order_number(), 
+								$item_id, 
+								$new_count,
+								$new_total_with_tax
+							),
+							[ 'source' => 'oc-aviv-pos-webhook', 'order_id' => $order->get_id() ]
+						);
+					}
+				}
+			}
+		}
+
+		// Step 4: Delete items from order that are not in webhook
+		foreach ( $order->get_items() as $line_item_id => $line_item ) {
+			$product = $line_item->get_product();
+			if ( ! $product ) {
+				continue;
+			}
+
+			$product_id = $product->get_sku() ?: (string) $product->get_id();
 			
-			$order_total = $order_subtotal + $order_tax + $order->get_shipping_total() - $order->get_total_discount();
-			
-//			$order->set_subtotal( $order_subtotal );
-//			$order->set_total( $order_total );
-//			$order->set_total_tax( $order_tax );
-			
-			$order->add_order_note( 
-				sprintf( __( 'עודכנו %d פריטים מ-Aviv POS', 'oc-aviv-pos' ), $updated_count )
-			);
+			// Check if this product exists in webhook
+			if ( ! in_array( (string) $product_id, $webhook_skus, true ) ) {
+				// Product not in webhook - delete it
+				$order->remove_item( $line_item_id );
+				$deleted_count++;
+				
+				$logger->info( 
+					sprintf( 'Aviv POS Webhook: Order %s item %s removed (not in webhook)', 
+						$order->get_order_number(), 
+						$product_id
+					),
+					[ 'source' => 'oc-aviv-pos-webhook', 'order_id' => $order->get_id() ]
+				);
+			}
+		}
+
+		// Save order after all changes
+		if ( $updated_count > 0 || $added_count > 0 || $deleted_count > 0 ) {
 			$order->save();
 
+			$changes_summary = [];
+			if ( $updated_count > 0 ) {
+				$changes_summary[] = sprintf( __( '%d עודכנו', 'oc-aviv-pos' ), $updated_count );
+			}
+			if ( $added_count > 0 ) {
+				$changes_summary[] = sprintf( __( '%d נוספו', 'oc-aviv-pos' ), $added_count );
+			}
+			if ( $deleted_count > 0 ) {
+				$changes_summary[] = sprintf( __( '%d נמחקו', 'oc-aviv-pos' ), $deleted_count );
+			}
+
+			$order->add_order_note( 
+				sprintf( __( 'פריטים עודכנו מ-Aviv POS: %s', 'oc-aviv-pos' ), implode( ', ', $changes_summary ) )
+			);
+
 			$logger->info( 
-				sprintf( 'Aviv POS Webhook: Order %s items updated (%d items changed)', $order->get_order_number(), $updated_count ),
+				sprintf( 'Aviv POS Webhook: Order %s items synced - %d updated, %d added, %d deleted', 
+					$order->get_order_number(), 
+					$updated_count, 
+					$added_count, 
+					$deleted_count
+				),
 				[ 'source' => 'oc-aviv-pos-webhook', 'order_id' => $order->get_id() ]
 			);
 		}
@@ -546,7 +701,32 @@ class OC_Aviv_Pos_Webhook {
 			add_action( $hook[0], $hook[1], $hook[2] );
 		}
 		
-		return $updated_count;
+		return $updated_count + $added_count + $deleted_count;
+	}
+
+	/**
+	 * Find product by SKU or ID.
+	 *
+	 * @param string $sku_or_id Product SKU or ID.
+	 * @return WC_Product|null
+	 */
+	private static function find_product_by_sku_or_id( string $sku_or_id ): ?WC_Product {
+		// Try by ID first
+		$product = wc_get_product( $sku_or_id );
+		if ( $product ) {
+			return $product;
+		}
+
+		// Try by SKU
+		$product_id = wc_get_product_id_by_sku( $sku_or_id );
+		if ( $product_id ) {
+			$product = wc_get_product( $product_id );
+			if ( $product ) {
+				return $product;
+			}
+		}
+
+		return null;
 	}
 
 	/**
