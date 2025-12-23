@@ -667,6 +667,8 @@ class OC_Aviv_Pos_Webhook {
 
 		// Save order after all changes
 		if ( $updated_count > 0 || $added_count > 0 || $deleted_count > 0 ) {
+			// Calculate totals to ensure all order amounts are correct
+			$order->calculate_totals();
 			$order->save();
 
 			$changes_summary = [];
