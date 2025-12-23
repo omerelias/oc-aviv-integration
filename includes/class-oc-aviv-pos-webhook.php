@@ -571,45 +571,24 @@ class OC_Aviv_Pos_Webhook {
 					continue;
 				}
 
-				// Calculate price from webhook data
-				$new_total_with_tax = 0;
-				$new_subtotal = 0;
-				$new_tax = 0;
-
-				if ( $item_price_agorot !== null ) {
-					// Price in agorot is the total line price (subtotal + tax)
-					$new_total_with_tax = $item_price_agorot / 100;
-					
-					// Get tax rate from product
-					$tax_rates = WC_Tax::get_rates( $product->get_tax_class() );
-					$tax_rate = 0;
-					if ( ! empty( $tax_rates ) ) {
-						$tax_rate = array_sum( wp_list_pluck( $tax_rates, 'rate' ) );
-					}
-					
-					// Split total between subtotal and tax
-					if ( $tax_rate > 0 ) {
-						$new_subtotal = $new_total_with_tax / ( 1 + ( $tax_rate / 100 ) );
-						$new_tax = $new_total_with_tax - $new_subtotal;
-					} else {
-						$new_subtotal = $new_total_with_tax;
-						$new_tax = 0;
-					}
-				} else {
-					// No price in webhook - use product price
+				// Calculate price from product (use sale price if available, otherwise regular price)
+				$product_price = $product->get_sale_price();
+				if ( empty( $product_price ) ) {
 					$product_price = $product->get_price();
-					$new_subtotal = $product_price * $new_count;
-					
-					// Calculate tax
-					$tax_rates = WC_Tax::get_rates( $product->get_tax_class() );
-					if ( ! empty( $tax_rates ) ) {
-						$tax_rate = array_sum( wp_list_pluck( $tax_rates, 'rate' ) );
-						$new_tax = $new_subtotal * ( $tax_rate / 100 );
-					} else {
-						$new_tax = 0;
-					}
-					$new_total_with_tax = $new_subtotal + $new_tax;
 				}
+				
+				// Calculate subtotal and tax based on product price
+				$new_subtotal = $product_price * $new_count;
+				
+				// Calculate tax
+				$tax_rates = WC_Tax::get_rates( $product->get_tax_class() );
+				$new_tax = 0;
+				if ( ! empty( $tax_rates ) ) {
+					$tax_rate = array_sum( wp_list_pluck( $tax_rates, 'rate' ) );
+					$new_tax = $new_subtotal * ( $tax_rate / 100 );
+				}
+				
+				$new_total_with_tax = $new_subtotal + $new_tax;
 
 				// Add product to order
 				$item_id_added = $order->add_product( $product, $new_count );
