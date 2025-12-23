@@ -572,16 +572,36 @@ class OC_Aviv_Pos_Webhook {
 				}
 
 				// Calculate price from product (use sale price if available, otherwise regular price)
-				$product_price = $product->get_sale_price();
-				if ( empty( $product_price ) ) {
-					$product_price = $product->get_price();
+				// If variable product, get price and tax from first variation (all variations have same price)
+				$product_for_tax = $product;
+				if ( $product->is_type( 'variable' ) ) {
+					$variations = $product->get_children();
+					if ( ! empty( $variations ) ) {
+						$variation = wc_get_product( $variations[0] );
+						if ( $variation ) {
+							$product_price = $variation->get_sale_price();
+							if ( empty( $product_price ) ) {
+								$product_price = $variation->get_price();
+							}
+							$product_for_tax = $variation; // Use variation for tax calculation
+						} else {
+							$product_price = $product->get_price();
+						}
+					} else {
+						$product_price = $product->get_price();
+					}
+				} else {
+					$product_price = $product->get_sale_price();
+					if ( empty( $product_price ) ) {
+						$product_price = $product->get_price();
+					}
 				}
 				
 				// Calculate subtotal and tax based on product price
 				$new_subtotal = $product_price * $new_count;
 				
-				// Calculate tax
-				$tax_rates = WC_Tax::get_rates( $product->get_tax_class() );
+				// Calculate tax (use variation tax class if variable product)
+				$tax_rates = WC_Tax::get_rates( $product_for_tax->get_tax_class() );
 				$new_tax = 0;
 				if ( ! empty( $tax_rates ) ) {
 					$tax_rate = array_sum( wp_list_pluck( $tax_rates, 'rate' ) );
