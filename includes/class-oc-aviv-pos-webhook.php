@@ -431,6 +431,21 @@ class OC_Aviv_Pos_Webhook {
 				$price_changed = abs( $current_total_with_tax - $new_total_with_tax ) > 0.01;
 			}
 			
+			// If quantity is 0, delete the item immediately
+			if ( $new_count <= 0 ) {
+				$order->remove_item( $found_item->get_id() );
+				$deleted_count++;
+				
+				$logger->info( 
+					sprintf( 'Aviv POS Webhook: Order %s item %s removed (quantity is 0)', 
+						$order->get_order_number(), 
+						$item_id
+					),
+					[ 'source' => 'oc-aviv-pos-webhook', 'order_id' => $order->get_id() ]
+				);
+				continue;
+			}
+			
 			if ( $quantity_changed || $price_changed ) {
 				// Calculate price per unit BEFORE updating anything
 				// This preserves the original unit price
@@ -539,7 +554,7 @@ class OC_Aviv_Pos_Webhook {
 			$new_count = isset( $item_data['count'] ) ? floatval( $item_data['count'] ) : null;
 			$item_price_agorot = isset( $item_data['price'] ) ? floatval( $item_data['price'] ) : null; // Price in agorot
 
-			if ( empty( $item_id ) || $new_count === null ) {
+			if ( empty( $item_id ) || $new_count === null || $new_count <= 0 ) {
 				continue;
 			}
 
@@ -657,6 +672,28 @@ class OC_Aviv_Pos_Webhook {
 				
 				$logger->info( 
 					sprintf( 'Aviv POS Webhook: Order %s item %s removed (not in webhook)', 
+						$order->get_order_number(), 
+						$product_id
+					),
+					[ 'source' => 'oc-aviv-pos-webhook', 'order_id' => $order->get_id() ]
+				);
+			}
+		}
+
+		// Step 5: Delete any remaining items with quantity 0 (safety check)
+		foreach ( $order->get_items() as $line_item_id => $line_item ) {
+			$quantity = $line_item->get_quantity();
+			
+			// Check if quantity is 0
+			if ( $quantity <= 0 ) {
+				$product = $line_item->get_product();
+				$product_id = $product ? ( $product->get_sku() ?: (string) $product->get_id() ) : 'unknown';
+				
+				$order->remove_item( $line_item_id );
+				$deleted_count++;
+				
+				$logger->info( 
+					sprintf( 'Aviv POS Webhook: Order %s item %s removed (quantity is 0)', 
 						$order->get_order_number(), 
 						$product_id
 					),
