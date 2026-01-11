@@ -154,6 +154,55 @@
 				$button.prop('disabled', false).text(originalText);
 			});
 		});
+
+		// Import products button
+		$('#oc_aviv_import_products').on('click', function(e){
+			e.preventDefault();
+			var filename = $('#oc_aviv_import_file_select').val();
+			if(!filename){
+				alert('אנא בחר קובץ מהרשימה');
+				return;
+			}
+			if(!confirm('האם אתה בטוח שברצונך לעדכן מוצרים מהקובץ ' + filename + '?')){
+				return;
+			}
+			var nonce = $('#oc_aviv_import_nonce').val();
+			var $button = $(this);
+			var $result = $('#oc_aviv_import_result');
+			var originalText = $button.text();
+			$button.prop('disabled', true).text('מעבד...');
+			$result.html('<p style="color: #2271b1;">מעבד קובץ...</p>');
+			$.post(ajaxurl, {
+				action: 'oc_aviv_pos_import_products',
+				filename: filename,
+				nonce: nonce
+			}).done(function(resp){
+				if(!resp || !resp.success){
+					var msg = (resp && resp.data && resp.data.message) ? resp.data.message : 'שגיאה';
+					$result.html('<div style="background: #fef2f2; border: 1px solid #f8d7da; padding: 12px; border-radius: 4px; color: #842029;"><strong>שגיאה:</strong> ' + msg + '</div>');
+					$button.prop('disabled', false).text(originalText);
+					return;
+				}
+				var data = resp.data || {};
+				var updated = data.updated || 0;
+				var notFound = data.not_found || 0;
+				var errors = data.errors || [];
+				var message = 'ייבוא הושלם בהצלחה!<br>';
+				message += '<strong>עודכנו:</strong> ' + updated + ' מוצרים<br>';
+				if(notFound > 0){
+					message += '<strong>לא נמצאו:</strong> ' + notFound + ' מוצרים<br>';
+				}
+				if(errors.length > 0){
+					message += '<strong>שגיאות:</strong> ' + errors.length + '<br>';
+				}
+				$result.html('<div style="background: #d1e7dd; border: 1px solid #badbcc; padding: 12px; border-radius: 4px; color: #0f5132;">' + message + '</div>');
+				$button.prop('disabled', false).text(originalText);
+			}).fail(function(xhr){
+				var err = 'שגיאה: ' + xhr.status;
+				$result.html('<div style="background: #fef2f2; border: 1px solid #f8d7da; padding: 12px; border-radius: 4px; color: #842029;"><strong>שגיאה:</strong> ' + err + '</div>');
+				$button.prop('disabled', false).text(originalText);
+			});
+		});
 	});
 })(jQuery);
 

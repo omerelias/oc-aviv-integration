@@ -15,6 +15,7 @@ class OC_Aviv_Pos_Admin {
 		add_action( 'wp_ajax_oc_aviv_pos_debug', [ __CLASS__, 'ajax_debug_payload' ] );
 		add_action( 'wp_ajax_oc_aviv_pos_send_order', [ __CLASS__, 'ajax_send_order' ] );
 		add_action( 'wp_ajax_oc_aviv_pos_clear_webhook_logs', [ __CLASS__, 'ajax_clear_webhook_logs' ] );
+		add_action( 'wp_ajax_oc_aviv_pos_import_products', [ __CLASS__, 'ajax_import_products' ] );
 	}
 
 	public static function add_menu(): void {
@@ -75,6 +76,7 @@ class OC_Aviv_Pos_Admin {
 			'api'      => __( 'חיבור API וטריגרים', 'oc-aviv-pos' ),
 			'comment'  => __( 'מיפויים', 'oc-aviv-pos' ),
 			'payments' => __( 'מיפוי תשלומים', 'oc-aviv-pos' ),
+			'products' => __( 'ייבוא מוצרים', 'oc-aviv-pos' ),
 			'webhooks' => __( 'לוג Webhook', 'oc-aviv-pos' ),
 		];
 
@@ -100,6 +102,9 @@ class OC_Aviv_Pos_Admin {
 							break;
 						case 'payments':
 							self::render_payments_tab( $settings );
+							break;
+						case 'products':
+							self::render_products_import_tab( $settings );
 							break;
 						case 'api':
 						default:
@@ -382,6 +387,20 @@ class OC_Aviv_Pos_Admin {
 			}
 		}
 
+		// Products import tab fields.
+		if ( array_key_exists( 'products_import_enabled', $data ) ) {
+			$sanitized['products_import_enabled'] = ! empty( $data['products_import_enabled'] ) ? 'yes' : 'no';
+		}
+		if ( array_key_exists( 'products_import_update_price', $data ) ) {
+			$sanitized['products_import_update_price'] = ! empty( $data['products_import_update_price'] ) ? 'yes' : 'no';
+		}
+		if ( array_key_exists( 'products_import_update_stock', $data ) ) {
+			$sanitized['products_import_update_stock'] = ! empty( $data['products_import_update_stock'] ) ? 'yes' : 'no';
+		}
+		if ( array_key_exists( 'products_import_file_url', $data ) ) {
+			$sanitized['products_import_file_url'] = esc_url_raw( $data['products_import_file_url'] );
+		}
+
 		update_option( OC_AVIV_POS_OPTION_KEY, $sanitized );
 
 		return $sanitized;
@@ -399,6 +418,10 @@ class OC_Aviv_Pos_Admin {
 			'variation_separator'=> ': ',
 			'payment_mapping'    => [],
 			'shipping_mapping'   => [],
+			'products_import_enabled' => 'no',
+			'products_import_update_price' => 'yes',
+			'products_import_update_stock' => 'no',
+			'products_import_file_url' => '',
 		];
 
 		$saved = get_option( OC_AVIV_POS_OPTION_KEY, [] );
@@ -703,6 +726,161 @@ class OC_Aviv_Pos_Admin {
 		OC_Aviv_Pos_Webhook::clear_webhook_logs();
 
 		wp_send_json_success( [ 'message' => __( 'Webhook logs cleared', 'oc-aviv-pos' ) ] );
+	}
+
+	/**
+	 * Render products import tab.
+	 */
+	private static function render_products_import_tab( array $settings ): void {
+		$enabled = $settings['products_import_enabled'] ?? 'no';
+		$update_price = $settings['products_import_update_price'] ?? 'yes';
+		$update_stock = $settings['products_import_update_stock'] ?? 'no';
+		$file_url = $settings['products_import_file_url'] ?? '';
+		
+		// Get uploads directory path
+		$upload_dir = wp_upload_dir();
+		$import_dir = $upload_dir['basedir'] . '/oc-aviv-pos-import';
+		$import_url = $upload_dir['baseurl'] . '/oc-aviv-pos-import';
+		
+		// Create directory if it doesn't exist
+		if ( ! is_dir( $import_dir ) ) {
+			wp_mkdir_p( $import_dir );
+		}
+		
+		// List files in import directory
+		$files = [];
+		if ( is_dir( $import_dir ) ) {
+			$all_files = glob( $import_dir . '/*.{xlsx,xls,csv}', GLOB_BRACE );
+			if ( $all_files ) {
+				$files = array_filter( $all_files, 'is_file' );
+				$files = array_map( 'basename', $files );
+			}
+		}
+		?>
+		<h2><?php esc_html_e( 'הגדרות ייבוא מוצרים', 'oc-aviv-pos' ); ?></h2>
+		<table class="form-table">
+			<tr>
+				<th scope="row"><label for="products_import_enabled"><?php esc_html_e( 'הפעל ייבוא מוצרים', 'oc-aviv-pos' ); ?></label></th>
+				<td>
+					<label>
+						<input type="checkbox" name="settings[products_import_enabled]" id="products_import_enabled" value="yes" <?php checked( $enabled, 'yes' ); ?> />
+						<?php esc_html_e( 'הפעל משיכת מוצרים מקובץ', 'oc-aviv-pos' ); ?>
+					</label>
+					<p class="description"><?php esc_html_e( 'כאשר מופעל, התוסף ימשוך מוצרים מקובץ Excel/CSV.', 'oc-aviv-pos' ); ?></p>
+				</td>
+			</tr>
+			<tr>
+				<th scope="row"><label for="products_import_update_price"><?php esc_html_e( 'עדכן מחיר', 'oc-aviv-pos' ); ?></label></th>
+				<td>
+					<label>
+						<input type="checkbox" name="settings[products_import_update_price]" id="products_import_update_price" value="yes" <?php checked( $update_price, 'yes' ); ?> />
+						<?php esc_html_e( 'עדכן מחיר מכירה של מוצרים', 'oc-aviv-pos' ); ?>
+					</label>
+					<p class="description"><?php esc_html_e( 'כאשר מסומן, המחיר מהקובץ יעדכן את מחיר המכירה של המוצר.', 'oc-aviv-pos' ); ?></p>
+				</td>
+			</tr>
+			<tr>
+				<th scope="row"><label for="products_import_update_stock"><?php esc_html_e( 'עדכן מלאי', 'oc-aviv-pos' ); ?></label></th>
+				<td>
+					<label>
+						<input type="checkbox" name="settings[products_import_update_stock]" id="products_import_update_stock" value="yes" <?php checked( $update_stock, 'yes' ); ?> />
+						<?php esc_html_e( 'עדכן מלאי של מוצרים', 'oc-aviv-pos' ); ?>
+					</label>
+					<p class="description"><?php esc_html_e( 'כאשר מסומן, המלאי מהקובץ יעדכן את המלאי של המוצר (אם יש עמודת מלאי בקובץ).', 'oc-aviv-pos' ); ?></p>
+				</td>
+			</tr>
+			<tr>
+				<th scope="row"><label for="products_import_file_url"><?php esc_html_e( 'קישור לקובץ (חיצוני)', 'oc-aviv-pos' ); ?></label></th>
+				<td>
+					<input name="settings[products_import_file_url]" id="products_import_file_url" type="url" class="regular-text" value="<?php echo esc_attr( $file_url ); ?>" placeholder="https://example.com/products.xlsx" />
+					<p class="description"><?php esc_html_e( 'קישור חיצוני לקובץ Excel/CSV (לשימוש עתידי).', 'oc-aviv-pos' ); ?></p>
+				</td>
+			</tr>
+		</table>
+		<hr />
+		<h2><?php esc_html_e( 'כלי דיבאג - משיכת קובץ', 'oc-aviv-pos' ); ?></h2>
+		<p class="description"><?php esc_html_e( 'משוך קובץ מתיקייה ב-wp-content/uploads/oc-aviv-pos-import/ ועדכן מוצרים.', 'oc-aviv-pos' ); ?></p>
+		<table class="form-table">
+			<tr>
+				<th scope="row"><?php esc_html_e( 'תיקיית ייבוא', 'oc-aviv-pos' ); ?></th>
+				<td>
+					<code style="background: #f0f0f1; padding: 8px 12px; display: inline-block; border-radius: 4px;"><?php echo esc_html( $import_dir ); ?></code>
+					<p class="description"><?php esc_html_e( 'העלה קבצי Excel/CSV לתיקייה זו (xlsx, xls, csv).', 'oc-aviv-pos' ); ?></p>
+				</td>
+			</tr>
+			<?php if ( ! empty( $files ) ) : ?>
+			<tr>
+				<th scope="row"><?php esc_html_e( 'קבצים זמינים', 'oc-aviv-pos' ); ?></th>
+				<td>
+					<select id="oc_aviv_import_file_select" style="min-width: 300px;">
+						<option value=""><?php esc_html_e( 'בחר קובץ...', 'oc-aviv-pos' ); ?></option>
+						<?php foreach ( $files as $file ) : ?>
+							<option value="<?php echo esc_attr( $file ); ?>"><?php echo esc_html( $file ); ?></option>
+						<?php endforeach; ?>
+					</select>
+				</td>
+			</tr>
+			<?php else : ?>
+			<tr>
+				<th scope="row"><?php esc_html_e( 'קבצים זמינים', 'oc-aviv-pos' ); ?></th>
+				<td>
+					<p style="color: #d63638;"><?php esc_html_e( 'לא נמצאו קבצים בתיקייה. העלה קובץ Excel/CSV לתיקייה.', 'oc-aviv-pos' ); ?></p>
+				</td>
+			</tr>
+			<?php endif; ?>
+			<tr>
+				<th scope="row"><?php esc_html_e( 'פעולה', 'oc-aviv-pos' ); ?></th>
+				<td>
+					<button type="button" class="button button-primary" id="oc_aviv_import_products">
+						<?php esc_html_e( 'משוך ועדכן מוצרים', 'oc-aviv-pos' ); ?>
+					</button>
+					<input type="hidden" id="oc_aviv_import_nonce" value="<?php echo esc_attr( wp_create_nonce( 'oc_aviv_pos_import_products' ) ); ?>" />
+					<div id="oc_aviv_import_result" style="margin-top: 15px;"></div>
+				</td>
+			</tr>
+		</table>
+		<?php
+	}
+
+	/**
+	 * AJAX handler for importing products from file.
+	 */
+	public static function ajax_import_products(): void {
+		check_ajax_referer( 'oc_aviv_pos_import_products', 'nonce' );
+
+		if ( ! current_user_can( 'manage_woocommerce' ) ) {
+			wp_send_json_error( [ 'message' => __( 'Permission denied', 'oc-aviv-pos' ) ], 403 );
+		}
+
+		$filename = isset( $_POST['filename'] ) ? sanitize_file_name( $_POST['filename'] ) : '';
+		if ( empty( $filename ) ) {
+			wp_send_json_error( [ 'message' => __( 'Filename is required', 'oc-aviv-pos' ) ], 400 );
+		}
+
+		// Get uploads directory
+		$upload_dir = wp_upload_dir();
+		$import_dir = $upload_dir['basedir'] . '/oc-aviv-pos-import';
+		$file_path = $import_dir . '/' . $filename;
+
+		// Validate file exists
+		if ( ! file_exists( $file_path ) ) {
+			wp_send_json_error( [ 'message' => __( 'File not found', 'oc-aviv-pos' ) ], 404 );
+		}
+
+		// Get settings
+		$settings = self::get_settings();
+		$update_price = ( $settings['products_import_update_price'] ?? 'yes' ) === 'yes';
+		$update_stock = ( $settings['products_import_update_stock'] ?? 'no' ) === 'yes';
+
+		// Import products
+		require_once OC_AVIV_POS_PATH . 'includes/class-oc-aviv-pos-products-importer.php';
+		$result = OC_Aviv_Pos_Products_Importer::import_from_file( $file_path, $update_price, $update_stock );
+
+		if ( is_wp_error( $result ) ) {
+			wp_send_json_error( [ 'message' => $result->get_error_message() ], 500 );
+		}
+
+		wp_send_json_success( $result );
 	}
 
 }

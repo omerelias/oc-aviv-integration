@@ -19,6 +19,7 @@ require_once OC_AVIV_POS_PATH . 'includes/class-oc-aviv-pos-admin.php';
 require_once OC_AVIV_POS_PATH . 'includes/class-oc-aviv-pos-api.php';
 require_once OC_AVIV_POS_PATH . 'includes/class-oc-aviv-pos-order-handler.php';
 require_once OC_AVIV_POS_PATH . 'includes/class-oc-aviv-pos-webhook.php';
+require_once OC_AVIV_POS_PATH . 'includes/class-oc-aviv-pos-products-importer.php';
 
 // Bootstrap.
 add_action(
