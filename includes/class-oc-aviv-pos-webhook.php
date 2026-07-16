@@ -30,7 +30,7 @@ class OC_Aviv_Pos_Webhook {
 			'ocaviv/v1',
 			'/getstatus',
 			[
-				'methods'             => [ 'GET', 'POST' ],
+				'methods'             => [ 'GET', 'POST', 'PUT', 'PATCH' ],
 				'callback'            => [ __CLASS__, 'handle_status_update' ],
 				'permission_callback' => '__return_true', // Public endpoint, Aviv POS will call it
 			]
@@ -289,7 +289,7 @@ class OC_Aviv_Pos_Webhook {
 			);
 			foreach ( $orders as $order_id ) {
 				$order_obj = wc_get_order( $order_id );
-				if ( $order_obj && (string) $order_obj->get_order_number() === $share_token ) {
+				if ( $order_obj instanceof WC_Order && (string) $order_obj->get_order_number() === $share_token ) {
 					$order = $order_obj;
 					break;
 				}
