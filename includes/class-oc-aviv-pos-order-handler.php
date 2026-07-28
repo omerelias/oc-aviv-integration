@@ -145,7 +145,7 @@ class OC_Aviv_Pos_Order_Handler {
 			'items'             => $items,
 			'charges'           => [],
 			'comment'           => '',
-			'formatCreatedDate' => self::format_datetime_utc( 'now' ),
+			'formatCreatedDate' => self::format_datetime_local( 'now' ),
 			'formatDeliveryDate'=> self::build_delivery_datetime( $order ),
 			'status'            => 'OPEN',
 			'contact'           => [
@@ -337,12 +337,12 @@ class OC_Aviv_Pos_Order_Handler {
 	}
 
 	/**
-	 * Format datetime to UTC with milliseconds and Z suffix (e.g. "2025-12-21T08:12:32.055Z").
+	 * Format datetime in the site local timezone (Israel) with milliseconds and real UTC offset (e.g. "2026-07-28T16:00:00.055+03:00").
 	 *
 	 * @param string|DateTimeInterface $datetime
 	 * @return string
 	 */
-	private static function format_datetime_utc( $datetime ): string {
+	private static function format_datetime_local( $datetime ): string {
 		if ( is_string( $datetime ) ) {
 			$dt = date_create_immutable( $datetime, wp_timezone() );
 		} elseif ( $datetime instanceof DateTimeInterface ) {
@@ -355,11 +355,12 @@ class OC_Aviv_Pos_Order_Handler {
 			$dt = date_create_immutable( 'now', wp_timezone() );
 		}
 
-		// Convert to UTC
-		$dt_utc = $dt->setTimezone( new DateTimeZone( 'UTC' ) );
+		// Keep in the site local timezone (Israel). Aviv reads the wall-clock digits literally,
+		// so we must send local time, not UTC (e.g. 16:00+03:00, not 13:00Z).
+		$dt_local = $dt->setTimezone( wp_timezone() );
 
-		// Format: Y-m-d\TH:i:s.v\Z (with milliseconds and Z)
-		return $dt_utc->format( 'Y-m-d\TH:i:s.v\Z' );
+		// Format: Y-m-d\TH:i:s.vP (milliseconds + real +HH:MM offset)
+		return $dt_local->format( 'Y-m-d\TH:i:s.vP' );
 	}
 
 	/**
@@ -381,10 +382,10 @@ class OC_Aviv_Pos_Order_Handler {
 		}
 
 		if ( $dt ) {
-			return self::format_datetime_utc( $dt );
+			return self::format_datetime_local( $dt );
 		}
 
-		return self::format_datetime_utc( current_time( 'mysql', true ) );
+		return self::format_datetime_local( current_time( 'mysql' ) );
 	}
 
 	/**
