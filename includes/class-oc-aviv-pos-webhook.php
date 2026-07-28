@@ -351,400 +351,119 @@ class OC_Aviv_Pos_Webhook {
 	 * @return int Number of items updated/added/deleted.
 	 */
 	private static function handle_items_update_for_order( WC_Order $order, array $data, $logger ): int {
-		// Temporarily remove hooks that might recalculate prices
-		// This prevents theme/plugin hooks from interfering with our price updates
+		// Temporarily remove hooks that recalculate prices during our edits.
 		$removed_hooks = [];
 		if ( has_action( 'woocommerce_before_calculate_totals', 'sea2door_add_custom_price' ) ) {
 			remove_action( 'woocommerce_before_calculate_totals', 'sea2door_add_custom_price', 20 );
 			$removed_hooks[] = [ 'woocommerce_before_calculate_totals', 'sea2door_add_custom_price', 20 ];
 		}
-		
+
 		$items = $data['items'] ?? [];
-		$updated_count = 0;
-		$added_count = 0;
-		$deleted_count = 0;
 
-		// Collect all SKUs from webhook
-		$webhook_skus = [];
-		foreach ( $items as $item_data ) {
-			$item_id = $item_data['id'] ?? '';
-			if ( ! empty( $item_id ) ) {
-				$webhook_skus[] = (string) $item_id;
+		// Aviv represents an edited order as DELTA lines: the same SKU may appear several
+		// times, counts can be negative (removals/credits), and ad-hoc products arrive as
+		// TEXT rows with an empty id (and 999xxx SKUs that do not exist in WooCommerce).
+		// The `price` field is the line-total magnitude in agorot; the sign of `count`
+		// tells us whether the line adds to or subtracts from the basket. Aggregate to the
+		// net final basket first, then rebuild the order from it (Aviv is authoritative
+		// at finalize).
+		$agg = [];
+		foreach ( $items as $row ) {
+			$rid   = isset( $row['id'] ) ? trim( (string) $row['id'] ) : '';
+			$desc  = isset( $row['desc'] ) ? (string) $row['desc'] : '';
+			$count = isset( $row['count'] ) ? floatval( $row['count'] ) : 0.0;
+			$price = isset( $row['price'] ) ? floatval( $row['price'] ) : 0.0; // agorot, magnitude
+			$type  = isset( $row['itemType'] ) ? (string) $row['itemType'] : 'PRODUCT';
+
+			$is_text = ( $rid === '' || $type === 'TEXT' );
+			$key     = $is_text ? ( 'text::' . $desc ) : ( 'sku::' . $rid );
+
+			if ( ! isset( $agg[ $key ] ) ) {
+				$agg[ $key ] = [ 'id' => $rid, 'desc' => $desc, 'is_text' => $is_text, 'count' => 0.0, 'total_agorot' => 0 ];
+			}
+			$sign = ( $count < 0 ) ? -1 : 1;
+			$agg[ $key ]['count']        += $count;
+			$agg[ $key ]['total_agorot'] += (int) round( $price ) * $sign;
+			if ( $desc !== '' ) {
+				$agg[ $key ]['desc'] = $desc;
 			}
 		}
 
-		// Step 1: Update existing items and collect order SKUs
-		$order_skus = [];
-		foreach ( $order->get_items() as $line_item ) {
-			$product = $line_item->get_product();
-			if ( ! $product ) {
-				continue;
-			}
-
-			// Match by SKU or product ID
-			$product_id = $product->get_sku() ?: (string) $product->get_id();
-			$order_skus[] = (string) $product_id;
+		// Remove all current line items and rebuild from the aggregated net basket.
+		foreach ( $order->get_items() as $line_id => $line ) {
+			$order->remove_item( $line_id );
 		}
 
-		// Step 2: Update existing items
-		foreach ( $items as $item_data ) {
-			$item_id = $item_data['id'] ?? '';
-			$new_count = isset( $item_data['count'] ) ? floatval( $item_data['count'] ) : null;
-			$item_price_agorot = isset( $item_data['price'] ) ? floatval( $item_data['price'] ) : null; // Price in agorot
-
-			if ( empty( $item_id ) || $new_count === null ) {
-				continue;
-			}
-
-			// Find matching line item in order
-			$found_item = null;
-			foreach ( $order->get_items() as $line_item ) {
-				$product = $line_item->get_product();
-				if ( ! $product ) {
-					continue;
-				}
-
-				// Match by SKU or product ID
-				$product_id = $product->get_sku() ?: (string) $product->get_id();
-				if ( (string) $product_id === (string) $item_id ) {
-					$found_item = $line_item;
-					break;
-				}
-			}
-
-			if ( ! $found_item ) {
-				// Item not found in order - will be added in step 3
-				continue;
-			}
-
-			$current_quantity = $found_item->get_quantity();
-			
-			// Get current values before update
-			$current_subtotal = $found_item->get_subtotal();
-			$current_subtotal_tax = $found_item->get_subtotal_tax();
-			$current_total_with_tax = $current_subtotal + $current_subtotal_tax;
-			
-			// Check if quantity or price changed
-			$quantity_changed = abs( $current_quantity - $new_count ) > 0.001; // Use small epsilon for float comparison
-			$price_changed = false;
-			
-			if ( $item_price_agorot !== null ) {
-				// Price in agorot is the total line price (subtotal + tax), same format as we send in build_payload
-				// Convert to shekels
-				$new_total_with_tax = $item_price_agorot / 100;
-				
-				$price_changed = abs( $current_total_with_tax - $new_total_with_tax ) > 0.01;
-			}
-			
-			// If quantity is 0, delete the item immediately
-			if ( $new_count <= 0 ) {
-				$order->remove_item( $found_item->get_id() );
-				$deleted_count++;
-				
-				$logger->info( 
-					sprintf( 'Aviv POS Webhook: Order %s item %s removed (quantity is 0)', 
-						$order->get_order_number(), 
-						$item_id
-					),
+		$applied = 0;
+		foreach ( $agg as $entry ) {
+			$net_count = round( (float) $entry['count'], 3 );
+			if ( $net_count <= 0 ) {
+				$logger->info(
+					sprintf( 'Aviv POS Webhook: Order %s item %s netted to %s - not added', $order->get_order_number(), $entry['id'] ?: 'TEXT', $net_count ),
 					[ 'source' => 'oc-aviv-pos-webhook', 'order_id' => $order->get_id() ]
 				);
 				continue;
 			}
-			
-			if ( $quantity_changed || $price_changed ) {
-				// Calculate price per unit BEFORE updating anything
-				// This preserves the original unit price
-				$price_per_unit_subtotal = $current_subtotal / max( $current_quantity, 0.001 );
-				$price_per_unit_tax = $current_subtotal_tax / max( $current_quantity, 0.001 );
-				
-				// Calculate new subtotal and tax based on new quantity
-				// This ensures the unit price stays the same
-				if ( $item_price_agorot !== null ) {
-					// Price in agorot is the total line price (subtotal + tax)
-					// Convert to shekels
-					$new_total_with_tax = $item_price_agorot / 100;
-					
-					// Calculate tax rate from original item to split the new total
-					$tax_rate = 0;
-					if ( $current_subtotal > 0 && $current_subtotal_tax > 0 ) {
-						$tax_rate = ( $current_subtotal_tax / $current_subtotal ) * 100;
-					}
-					
-					// Split new total between subtotal and tax
-					if ( $tax_rate > 0 ) {
-						// Calculate subtotal from total (total = subtotal * (1 + tax_rate/100))
-						$new_subtotal = $new_total_with_tax / ( 1 + ( $tax_rate / 100 ) );
-						$new_tax = $new_total_with_tax - $new_subtotal;
-					} else {
-						// No tax
-						$new_subtotal = $new_total_with_tax;
-						$new_tax = 0;
-					}
-				} elseif ( $quantity_changed ) {
-					// Only quantity changed - multiply original unit price by new quantity
-					// This ensures the total increases proportionally, not the unit price decreases
-					$new_subtotal = $price_per_unit_subtotal * $new_count;
-					$new_tax = $price_per_unit_tax * $new_count;
-				} else {
-					// No changes needed
-					continue;
+
+			$line_total = $entry['total_agorot'] / 100; // shekels; sign already applied
+			if ( $line_total < 0 ) {
+				$line_total = 0;
+			}
+
+			$product = null;
+			if ( ! $entry['is_text'] && $entry['id'] !== '' ) {
+				$product = self::find_product_by_sku_or_id( $entry['id'] );
+			}
+
+			if ( $product ) {
+				$item_id = $order->add_product( $product, $net_count );
+				$li      = $item_id ? $order->get_item( $item_id ) : null;
+				if ( $li ) {
+					$li->set_subtotal( $line_total );
+					$li->set_total( $line_total );
+					$li->set_subtotal_tax( 0 );
+					$li->set_total_tax( 0 );
+					$li->save();
 				}
-				
-				// CRITICAL: We need to update subtotal BEFORE quantity to preserve unit price
-				// WooCommerce calculates unit price as subtotal/quantity
-				// If quantity is 1 and subtotal is 1, unit price = 1
-				// If we change quantity to 6, we need subtotal to be 6 BEFORE setting quantity
-				// So: set subtotal to 6, then set quantity to 6, then unit price = 6/6 = 1 (preserved!)
-				
-				// First, update subtotal and tax (this sets the total line price)
-				$found_item->set_subtotal( $new_subtotal );
-				$found_item->set_total( $new_subtotal );
-				$found_item->set_subtotal_tax( $new_tax );
-				$found_item->set_total_tax( $new_tax );
-				
-				// Then update quantity (WooCommerce will calculate unit price = new_subtotal / new_quantity)
-				$found_item->set_quantity( $new_count );
-				
-				// Save the item - this commits both changes together
-				$found_item->save();
-				
-				// Verify the unit price is correct after save
-				// If WooCommerce recalculated it incorrectly, fix it
-				$saved_subtotal = $found_item->get_subtotal();
-				$saved_quantity = $found_item->get_quantity();
-				$actual_unit_price = $saved_quantity > 0 ? $saved_subtotal / $saved_quantity : 0;
-				$expected_unit_price = $price_per_unit_subtotal;
-				
-				// If unit price was recalculated incorrectly, fix it
-				if ( abs( $actual_unit_price - $expected_unit_price ) > 0.01 ) {
-					// Recalculate subtotal based on expected unit price
-					$corrected_subtotal = $expected_unit_price * $saved_quantity;
-					$corrected_tax = $price_per_unit_tax * $saved_quantity;
-					
-					$found_item->set_subtotal( $corrected_subtotal );
-					$found_item->set_total( $corrected_subtotal );
-					$found_item->set_subtotal_tax( $corrected_tax );
-					$found_item->set_total_tax( $corrected_tax );
-					$found_item->save();
-					
-					$logger->warning( 
-						sprintf( 'Aviv POS Webhook: Corrected unit price for item %s in order %s (was %s, should be %s)', 
-							$item_id, 
-							$order->get_order_number(),
-							$actual_unit_price,
-							$expected_unit_price
-						),
-						[ 'source' => 'oc-aviv-pos-webhook', 'order_id' => $order->get_id() ]
-					);
+			} else {
+				// Aviv-only SKU (e.g. 999xxx) or a TEXT row: add a custom line item with no product.
+				$li = new WC_Order_Item_Product();
+				$li->set_name( $entry['desc'] !== '' ? $entry['desc'] : ( 'פריט ' . $entry['id'] ) );
+				$li->set_quantity( $net_count );
+				$li->set_subtotal( $line_total );
+				$li->set_total( $line_total );
+				$li->set_subtotal_tax( 0 );
+				$li->set_total_tax( 0 );
+				if ( ! $entry['is_text'] && $entry['id'] !== '' ) {
+					$li->add_meta_data( '_aviv_sku', $entry['id'], true );
 				}
-				
-				$updated_count++;
-				
-				$logger->info( 
-					sprintf( 'Aviv POS Webhook: Order %s item %s updated - quantity: %s → %s%s', 
-						$order->get_order_number(), 
-						$item_id, 
-						$current_quantity, 
-						$new_count,
-						$price_changed ? ' (price also updated)' : ''
-					),
-					[ 'source' => 'oc-aviv-pos-webhook', 'order_id' => $order->get_id() ]
-				);
-			}
-		}
-
-		// Step 3: Add new items from webhook that don't exist in order
-		foreach ( $items as $item_data ) {
-			$item_id = $item_data['id'] ?? '';
-			$new_count = isset( $item_data['count'] ) ? floatval( $item_data['count'] ) : null;
-			$item_price_agorot = isset( $item_data['price'] ) ? floatval( $item_data['price'] ) : null; // Price in agorot
-
-			if ( empty( $item_id ) || $new_count === null || $new_count <= 0 ) {
-				continue;
+				$order->add_item( $li );
 			}
 
-			// Check if item already exists in order (was updated in step 2)
-			$item_exists = false;
-			foreach ( $order->get_items() as $line_item ) {
-				$product = $line_item->get_product();
-				if ( ! $product ) {
-					continue;
-				}
-
-				$product_id = $product->get_sku() ?: (string) $product->get_id();
-				if ( (string) $product_id === (string) $item_id ) {
-					$item_exists = true;
-					break;
-				}
-			}
-
-			// If item doesn't exist, add it
-			if ( ! $item_exists ) {
-				// Find product by SKU or ID
-				$product = self::find_product_by_sku_or_id( $item_id );
-				
-				if ( ! $product ) {
-					$logger->warning( 
-						sprintf( 'Aviv POS Webhook: Product %s not found in WooCommerce, cannot add to order %s', $item_id, $order->get_order_number() ),
-						[ 'source' => 'oc-aviv-pos-webhook', 'order_id' => $order->get_id() ]
-					);
-					continue;
-				}
-
-				// Calculate price from product (use sale price if available, otherwise regular price)
-				// If variable product, get price and tax from first variation (all variations have same price)
-				$product_for_tax = $product;
-				if ( $product->is_type( 'variable' ) ) {
-					$variations = $product->get_children();
-					if ( ! empty( $variations ) ) {
-						$variation = wc_get_product( $variations[0] );
-						if ( $variation ) {
-							$product_price = $variation->get_sale_price();
-							if ( empty( $product_price ) ) {
-								$product_price = $variation->get_price();
-							}
-							$product_for_tax = $variation; // Use variation for tax calculation
-						} else {
-							$product_price = $product->get_price();
-						}
-					} else {
-						$product_price = $product->get_price();
-					}
-				} else {
-					$product_price = $product->get_sale_price();
-					if ( empty( $product_price ) ) {
-						$product_price = $product->get_price();
-					}
-				}
-				
-				// Calculate subtotal and tax based on product price
-				$new_subtotal = $product_price * $new_count;
-				
-				// Calculate tax (use variation tax class if variable product)
-				$tax_rates = WC_Tax::get_rates( $product_for_tax->get_tax_class() );
-				$new_tax = 0;
-				if ( ! empty( $tax_rates ) ) {
-					$tax_rate = array_sum( wp_list_pluck( $tax_rates, 'rate' ) );
-					$new_tax = $new_subtotal * ( $tax_rate / 100 );
-				}
-				
-				$new_total_with_tax = $new_subtotal + $new_tax;
-
-				// Add product to order
-				$item_id_added = $order->add_product( $product, $new_count );
-				
-				if ( $item_id_added ) {
-					// Get the item we just added
-					$new_item = $order->get_item( $item_id_added );
-					if ( $new_item ) {
-						// Set custom prices
-						$new_item->set_subtotal( $new_subtotal );
-						$new_item->set_total( $new_subtotal );
-						$new_item->set_subtotal_tax( $new_tax );
-						$new_item->set_total_tax( $new_tax );
-						$new_item->save();
-						
-						$added_count++;
-						
-						$logger->info( 
-							sprintf( 'Aviv POS Webhook: Order %s item %s added - quantity: %s, price: %s', 
-								$order->get_order_number(), 
-								$item_id, 
-								$new_count,
-								$new_total_with_tax
-							),
-							[ 'source' => 'oc-aviv-pos-webhook', 'order_id' => $order->get_id() ]
-						);
-					}
-				}
-			}
-		}
-
-		// Step 4: Delete items from order that are not in webhook
-		foreach ( $order->get_items() as $line_item_id => $line_item ) {
-			$product = $line_item->get_product();
-			if ( ! $product ) {
-				continue;
-			}
-
-			$product_id = $product->get_sku() ?: (string) $product->get_id();
-			
-			// Check if this product exists in webhook
-			if ( ! in_array( (string) $product_id, $webhook_skus, true ) ) {
-				// Product not in webhook - delete it
-				$order->remove_item( $line_item_id );
-				$deleted_count++;
-				
-				$logger->info( 
-					sprintf( 'Aviv POS Webhook: Order %s item %s removed (not in webhook)', 
-						$order->get_order_number(), 
-						$product_id
-					),
-					[ 'source' => 'oc-aviv-pos-webhook', 'order_id' => $order->get_id() ]
-				);
-			}
-		}
-
-		// Step 5: Delete any remaining items with quantity 0 (safety check)
-		foreach ( $order->get_items() as $line_item_id => $line_item ) {
-			$quantity = $line_item->get_quantity();
-			
-			// Check if quantity is 0
-			if ( $quantity <= 0 ) {
-				$product = $line_item->get_product();
-				$product_id = $product ? ( $product->get_sku() ?: (string) $product->get_id() ) : 'unknown';
-				
-				$order->remove_item( $line_item_id );
-				$deleted_count++;
-				
-				$logger->info( 
-					sprintf( 'Aviv POS Webhook: Order %s item %s removed (quantity is 0)', 
-						$order->get_order_number(), 
-						$product_id
-					),
-					[ 'source' => 'oc-aviv-pos-webhook', 'order_id' => $order->get_id() ]
-				);
-			}
-		}
-
-		// Save order after all changes
-		if ( $updated_count > 0 || $added_count > 0 || $deleted_count > 0 ) {
-			// Calculate totals to ensure all order amounts are correct
-			$order->calculate_totals();
-			$order->save();
-
-			$changes_summary = [];
-			if ( $updated_count > 0 ) {
-				$changes_summary[] = sprintf( __( '%d עודכנו', 'oc-aviv-pos' ), $updated_count );
-			}
-			if ( $added_count > 0 ) {
-				$changes_summary[] = sprintf( __( '%d נוספו', 'oc-aviv-pos' ), $added_count );
-			}
-			if ( $deleted_count > 0 ) {
-				$changes_summary[] = sprintf( __( '%d נמחקו', 'oc-aviv-pos' ), $deleted_count );
-			}
-
-			$order->add_order_note( 
-				sprintf( __( 'פריטים עודכנו מ-Aviv POS: %s', 'oc-aviv-pos' ), implode( ', ', $changes_summary ) )
-			);
-
-			$logger->info( 
-				sprintf( 'Aviv POS Webhook: Order %s items synced - %d updated, %d added, %d deleted', 
-					$order->get_order_number(), 
-					$updated_count, 
-					$added_count, 
-					$deleted_count
-				),
+			$applied++;
+			$logger->info(
+				sprintf( 'Aviv POS Webhook: Order %s set item %s (%s) qty %s total %s%s', $order->get_order_number(), $entry['id'] ?: 'TEXT', $entry['desc'], $net_count, $line_total, $product ? '' : ' [custom line]' ),
 				[ 'source' => 'oc-aviv-pos-webhook', 'order_id' => $order->get_id() ]
 			);
 		}
-		
-		// Restore removed hooks
+
+		// Recalculate order totals from the rebuilt lines (keep our line totals, no tax recalc).
+		$order->calculate_totals( false );
+		$order->save();
+
+		$order->add_order_note( sprintf( __( 'פריטים סונכרנו מ-Aviv POS: %d פריטים בסל הסופי', 'oc-aviv-pos' ), $applied ) );
+
+		$logger->info(
+			sprintf( 'Aviv POS Webhook: Order %s items rebuilt from Aviv - %d final items, total %s', $order->get_order_number(), $applied, $order->get_total() ),
+			[ 'source' => 'oc-aviv-pos-webhook', 'order_id' => $order->get_id() ]
+		);
+
+		// Restore removed hooks.
 		foreach ( $removed_hooks as $hook ) {
 			add_action( $hook[0], $hook[1], $hook[2] );
 		}
-		
-		return $updated_count + $added_count + $deleted_count;
+
+		return $applied;
 	}
 
 	/**
