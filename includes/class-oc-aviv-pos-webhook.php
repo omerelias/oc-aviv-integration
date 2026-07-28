@@ -282,6 +282,11 @@ class OC_Aviv_Pos_Webhook {
 				sprintf( 'Aviv POS Webhook: Order %s marked as completed after items update', $order->get_order_number() ),
 				[ 'source' => 'oc-aviv-pos-webhook', 'order_id' => $order->get_id() ]
 			);
+
+			// Payment gateways are not always instantiated in this REST context, so Cardcom's
+			// own woocommerce_order_status_completed hook may not run. Trigger the J5 capture
+			// explicitly so the token is charged when Aviv finalizes the order.
+			self::maybe_capture_cardcom( $order, $logger );
 		}
 
 		// Return response
@@ -296,6 +301,28 @@ class OC_Aviv_Pos_Webhook {
 		http_response_code( $status_code );
 		echo wp_json_encode( $response_data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES );
 		exit;
+	}
+
+	/**
+	 * Trigger the Cardcom J5 capture explicitly (gateway hook may not be registered in REST).
+	 */
+	private static function maybe_capture_cardcom( WC_Order $order, $logger ): void {
+		if ( 'cardcom' !== $order->get_payment_method() ) {
+			return;
+		}
+		// Only when a J5 capture is pending (checkout set this to 'no'); order_capture_payment
+		// also guards on this and flips it to 'yes', so a later hook will not double-charge.
+		if ( 'no' !== (string) $order->get_meta( 'cardcom_charge_captured' ) ) {
+			return;
+		}
+		$gateways = ( function_exists( 'WC' ) && WC()->payment_gateways() ) ? WC()->payment_gateways()->payment_gateways() : [];
+		if ( isset( $gateways['cardcom'] ) && method_exists( $gateways['cardcom'], 'order_capture_payment' ) ) {
+			$logger->info(
+				sprintf( 'Aviv POS Webhook: triggering Cardcom J5 capture for order %s', $order->get_order_number() ),
+				[ 'source' => 'oc-aviv-pos-webhook', 'order_id' => $order->get_id() ]
+			);
+			$gateways['cardcom']->order_capture_payment( $order );
+		}
 	}
 
 	/**
