@@ -231,6 +231,49 @@ class OC_Aviv_Pos_Webhook {
 		// Save webhook call to debug log with response
 		self::log_webhook_call( $data, $response_data );
 
+		// Extra webhook logs around success flag to debug status update flow
+		if ( $success ) {
+			self::log_webhook_call(
+				array_merge(
+					$data,
+					[
+						'_stage'   => 'before_status_update',
+						'_success' => true,
+					]
+				),
+				$response_data
+			);
+
+			$logger->info(
+				sprintf(
+					'Aviv POS Webhook: Success=true before updating status for order %s',
+					$order->get_order_number()
+				),
+				[ 'source' => 'oc-aviv-pos-webhook', 'order_id' => $order->get_id() ]
+			);
+		} else {
+			self::log_webhook_call(
+				array_merge(
+					$data,
+					[
+						'_stage'    => 'before_status_update',
+						'_success'  => false,
+						'_errorMsg' => $error_msg,
+					]
+				),
+				$response_data
+			);
+
+			$logger->warning(
+				sprintf(
+					'Aviv POS Webhook: Success=false before updating status for order %s (error: %s)',
+					$order->get_order_number(),
+					$error_msg
+				),
+				[ 'source' => 'oc-aviv-pos-webhook', 'order_id' => $order->get_id() ]
+			);
+		}
+
 		// If this was an items update, mark order as completed at the end
 		if ( $success ) {
 			$order->update_status( 'wc-completed', __( 'הזמנה הושלמה לאחר עדכון כמויות מ-Aviv POS', 'oc-aviv-pos' ) );
@@ -360,101 +403,138 @@ class OC_Aviv_Pos_Webhook {
 
 		$items = $data['items'] ?? [];
 
-		// Aviv represents an edited order as DELTA lines: the same SKU may appear several
-		// times, counts can be negative (removals/credits), and ad-hoc products arrive as
-		// TEXT rows with an empty id (and 999xxx SKUs that do not exist in WooCommerce).
-		// The `price` field is the line-total magnitude in agorot; the sign of `count`
-		// tells us whether the line adds to or subtracts from the basket. Aggregate to the
-		// net final basket first, then rebuild the order from it (Aviv is authoritative
-		// at finalize).
+		// Aviv sends an edited order as DELTA lines: the same SKU may appear several times,
+		// counts can be negative (removals/credits), ad-hoc items arrive as TEXT rows with an
+		// empty id, and Aviv-only SKUs (e.g. 999xxx / 9000xxxxxx) have no WooCommerce product.
+		// `price` is the UNIT price in agorot (per kg/unit); the sign of `count` says whether
+		// the line adds or subtracts. Aggregate to the net basket (net qty and net line total).
 		$agg = [];
 		foreach ( $items as $row ) {
-			$rid   = isset( $row['id'] ) ? trim( (string) $row['id'] ) : '';
-			$desc  = isset( $row['desc'] ) ? (string) $row['desc'] : '';
-			$count = isset( $row['count'] ) ? floatval( $row['count'] ) : 0.0;
-			$price = isset( $row['price'] ) ? floatval( $row['price'] ) : 0.0; // agorot, magnitude
-			$type  = isset( $row['itemType'] ) ? (string) $row['itemType'] : 'PRODUCT';
+			$rid         = isset( $row['id'] ) ? trim( (string) $row['id'] ) : '';
+			$desc        = isset( $row['desc'] ) ? (string) $row['desc'] : '';
+			$count       = isset( $row['count'] ) ? floatval( $row['count'] ) : 0.0;
+			$unit_agorot = isset( $row['price'] ) ? floatval( $row['price'] ) : 0.0; // per unit
+			$type        = isset( $row['itemType'] ) ? (string) $row['itemType'] : 'PRODUCT';
 
 			$is_text = ( $rid === '' || $type === 'TEXT' );
 			$key     = $is_text ? ( 'text::' . $desc ) : ( 'sku::' . $rid );
 
 			if ( ! isset( $agg[ $key ] ) ) {
-				$agg[ $key ] = [ 'id' => $rid, 'desc' => $desc, 'is_text' => $is_text, 'count' => 0.0, 'total_agorot' => 0 ];
+				$agg[ $key ] = [ 'id' => $rid, 'desc' => $desc, 'is_text' => $is_text, 'count' => 0.0, 'total_agorot' => 0.0 ];
 			}
-			$sign = ( $count < 0 ) ? -1 : 1;
 			$agg[ $key ]['count']        += $count;
-			$agg[ $key ]['total_agorot'] += (int) round( $price ) * $sign;
+			$agg[ $key ]['total_agorot'] += $unit_agorot * $count; // signed count handles removals
 			if ( $desc !== '' ) {
 				$agg[ $key ]['desc'] = $desc;
 			}
 		}
 
-		// Remove all current line items and rebuild from the aggregated net basket.
-		foreach ( $order->get_items() as $line_id => $line ) {
-			$order->remove_item( $line_id );
+		// Index existing order line items so we can update them in place (keeps weighable meta).
+		$existing = [];
+		foreach ( $order->get_items() as $lid => $line ) {
+			$p   = $line->get_product();
+			$sku = $p ? ( $p->get_sku() ?: (string) $p->get_id() ) : '';
+			$k   = ( $sku !== '' ) ? ( 'sku::' . $sku ) : ( 'text::' . $line->get_name() );
+			$existing[ $k ] = $lid;
 		}
 
 		$applied = 0;
-		foreach ( $agg as $entry ) {
-			$net_count = round( (float) $entry['count'], 3 );
-			if ( $net_count <= 0 ) {
-				$logger->info(
-					sprintf( 'Aviv POS Webhook: Order %s item %s netted to %s - not added', $order->get_order_number(), $entry['id'] ?: 'TEXT', $net_count ),
-					[ 'source' => 'oc-aviv-pos-webhook', 'order_id' => $order->get_id() ]
-				);
-				continue;
-			}
-
-			$line_total = $entry['total_agorot'] / 100; // shekels; sign already applied
+		$seen    = [];
+		foreach ( $agg as $key => $e ) {
+			$seen[ $key ] = true;
+			$net_count  = round( (float) $e['count'], 3 );
+			$line_total = round( $e['total_agorot'] ) / 100; // shekels; sign already applied
 			if ( $line_total < 0 ) {
 				$line_total = 0;
 			}
 
-			$product = null;
-			if ( ! $entry['is_text'] && $entry['id'] !== '' ) {
-				$product = self::find_product_by_sku_or_id( $entry['id'] );
+			// Netted out -> remove the existing line if present.
+			if ( $net_count <= 0 ) {
+				if ( isset( $existing[ $key ] ) ) {
+					$order->remove_item( $existing[ $key ] );
+				}
+				continue;
 			}
 
-			if ( $product ) {
-				$item_id = $order->add_product( $product, $net_count );
-				$li      = $item_id ? $order->get_item( $item_id ) : null;
-				if ( $li ) {
-					$li->set_subtotal( $line_total );
-					$li->set_total( $line_total );
-					$li->set_subtotal_tax( 0 );
-					$li->set_total_tax( 0 );
-					$li->save();
-				}
-			} else {
-				// Aviv-only SKU (e.g. 999xxx) or a TEXT row: add a custom line item with no product.
-				$li = new WC_Order_Item_Product();
-				$li->set_name( $entry['desc'] !== '' ? $entry['desc'] : ( 'פריט ' . $entry['id'] ) );
+			if ( isset( $existing[ $key ] ) ) {
+				// Update the existing line in place.
+				$li = $order->get_item( $existing[ $key ] );
 				$li->set_quantity( $net_count );
 				$li->set_subtotal( $line_total );
 				$li->set_total( $line_total );
 				$li->set_subtotal_tax( 0 );
 				$li->set_total_tax( 0 );
-				if ( ! $entry['is_text'] && $entry['id'] !== '' ) {
-					$li->add_meta_data( '_aviv_sku', $entry['id'], true );
+				$li->save();
+			} else {
+				$product = null;
+				if ( ! $e['is_text'] && $e['id'] !== '' ) {
+					$product = self::find_product_by_sku_or_id( $e['id'] );
 				}
-				$order->add_item( $li );
+				if ( $product ) {
+					$iid = $order->add_product( $product, $net_count );
+					$li  = $iid ? $order->get_item( $iid ) : null;
+					if ( $li ) {
+						$li->set_subtotal( $line_total );
+						$li->set_total( $line_total );
+						$li->set_subtotal_tax( 0 );
+						$li->set_total_tax( 0 );
+						$li->save();
+					}
+				} else {
+					// Aviv-only SKU or TEXT row: custom line. Fall back to SKU/generic name when
+					// Aviv sends the description as question marks (its Hebrew is not UTF-8).
+					$clean_desc = trim( str_replace( '?', '', (string) $e['desc'] ) );
+					if ( $clean_desc !== '' ) {
+						$name = $e['desc'];
+					} elseif ( ! $e['is_text'] && $e['id'] !== '' ) {
+						$name = 'מק"ט ' . $e['id'];
+					} else {
+						$name = 'פריט מאביב';
+					}
+					$li = new WC_Order_Item_Product();
+					$li->set_name( $name );
+					$li->set_quantity( $net_count );
+					$li->set_subtotal( $line_total );
+					$li->set_total( $line_total );
+					$li->set_subtotal_tax( 0 );
+					$li->set_total_tax( 0 );
+					if ( ! $e['is_text'] && $e['id'] !== '' ) {
+						$li->add_meta_data( '_aviv_sku', $e['id'], true );
+					}
+					$order->add_item( $li );
+				}
 			}
-
 			$applied++;
-			$logger->info(
-				sprintf( 'Aviv POS Webhook: Order %s set item %s (%s) qty %s total %s%s', $order->get_order_number(), $entry['id'] ?: 'TEXT', $entry['desc'], $net_count, $line_total, $product ? '' : ' [custom line]' ),
-				[ 'source' => 'oc-aviv-pos-webhook', 'order_id' => $order->get_id() ]
-			);
 		}
 
-		// Recalculate order totals from the rebuilt lines (keep our line totals, no tax recalc).
-		$order->calculate_totals( false );
-		$order->save();
+		// Remove existing lines Aviv did not mention at all in this final basket.
+		foreach ( $existing as $k => $lid ) {
+			if ( ! isset( $seen[ $k ] ) ) {
+				$order->remove_item( $lid );
+			}
+		}
 
+		$order->calculate_totals( false );
+
+		// WC_Order::calculate_totals can mis-sum weighable (quantity-0) lines; force the order
+		// total from the line items we explicitly set so it always matches Aviv's basket.
+		// Aviv is authoritative on the final basket total (agorot). Use it directly so the
+		// order total always matches the POS regardless of how WooCommerce re-sums weighable
+		// (quantity-0) lines. Fall back to the sum of our line items only if Aviv omits it.
+		if ( isset( $data['total'] ) && (float) $data['total'] > 0 ) {
+			$order->set_total( round( (float) $data['total'] / 100, 2 ) );
+		} else {
+			$forced_total = 0.0;
+			foreach ( $order->get_items( array( 'line_item', 'fee', 'shipping' ) ) as $it ) {
+				$forced_total += (float) $it->get_total() + (float) $it->get_total_tax();
+			}
+			$order->set_total( round( $forced_total, 2 ) );
+		}
+		$order->save();
 		$order->add_order_note( sprintf( __( 'פריטים סונכרנו מ-Aviv POS: %d פריטים בסל הסופי', 'oc-aviv-pos' ), $applied ) );
 
 		$logger->info(
-			sprintf( 'Aviv POS Webhook: Order %s items rebuilt from Aviv - %d final items, total %s', $order->get_order_number(), $applied, $order->get_total() ),
+			sprintf( 'Aviv POS Webhook: Order %s items synced from Aviv - %d final items, total %s', $order->get_order_number(), $applied, $order->get_total() ),
 			[ 'source' => 'oc-aviv-pos-webhook', 'order_id' => $order->get_id() ]
 		);
 
