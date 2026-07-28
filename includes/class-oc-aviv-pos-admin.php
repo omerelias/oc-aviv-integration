@@ -644,7 +644,7 @@ class OC_Aviv_Pos_Admin {
 							] );
 							foreach ( $orders as $oid ) {
 								$order_obj = wc_get_order( $oid );
-								if ( $order_obj && (string) $order_obj->get_order_number() === $share_token ) {
+								if ( $order_obj instanceof WC_Order && (string) $order_obj->get_order_number() === $share_token ) {
 									$order = $order_obj;
 									break;
 								}
