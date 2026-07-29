@@ -107,6 +107,12 @@ class OC_Aviv_Pos_Order_Handler {
 			$lng = $matches[2];
 		}
 
+		// The checkout "order message" on these sites is a custom field, not the standard
+		// WooCommerce customer note. Read it robustly so it reaches Aviv.
+		$order_note = $order->get_customer_note();
+		if ( '' === trim( (string) $order_note ) ) { $order_note = (string) $order->get_meta( '_billing_notes' ); }
+		if ( '' === trim( (string) $order_note ) ) { $order_note = (string) $order->get_meta( '_shipping_notes' ); }
+
 		$address = [
 			'country'     => $order->get_billing_country() ?: $order->get_meta( '_billing_country' ),
 			'city'        => $order->get_meta( '_billing_city_name' ) ?: $order->get_meta( '_billing_city' ) ?: $order->get_billing_city(),
@@ -115,7 +121,7 @@ class OC_Aviv_Pos_Order_Handler {
 			'apt'         => $order->get_meta( '_billing_apartment' ) ?: '',
 			'floor'       => $order->get_meta( '_billing_floor' ) ?: '',
 			'entrance'    => $order->get_meta( '_billing_enter_code' ) ?: '',
-			'comment'     => $order->get_customer_note(),
+			'comment'     => $order_note,
 			'lat'         => $lat,
 			'lng'         => $lng,
 			'postalCode'  => $order->get_billing_postcode() ?: $order->get_meta( '_billing_postcode' ),
@@ -144,7 +150,7 @@ class OC_Aviv_Pos_Order_Handler {
 			'shareToken'        => (string) $order->get_order_number(),
 			'items'             => $items,
 			'charges'           => [],
-			'comment'           => '',
+			'comment'           => $order_note,
 			'formatCreatedDate' => self::format_datetime_local( 'now' ),
 			'formatDeliveryDate'=> self::build_delivery_datetime( $order ),
 			'status'            => 'OPEN',
