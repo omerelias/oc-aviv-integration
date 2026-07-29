@@ -276,17 +276,19 @@ class OC_Aviv_Pos_Webhook {
 
 		// If this was an items update, mark order as completed at the end
 		if ( $success ) {
+			// Charge the Cardcom J5 token BEFORE completing the order. Marking it completed sends
+			// the customer completed-order email, which can fatal inside a third-party plugin
+			// (e.g. the units plugin on product-less custom lines) and abort the request before
+			// the capture would run. Gateways are also not always instantiated in this REST
+			// context, so Cardcom's own status-completed hook may not fire either.
+			self::maybe_capture_cardcom( $order, $logger );
+
 			$order->update_status( 'wc-completed', __( 'הזמנה הושלמה לאחר עדכון כמויות מ-Aviv POS', 'oc-aviv-pos' ) );
 			$order->save();
 			$logger->info( 
 				sprintf( 'Aviv POS Webhook: Order %s marked as completed after items update', $order->get_order_number() ),
 				[ 'source' => 'oc-aviv-pos-webhook', 'order_id' => $order->get_id() ]
 			);
-
-			// Payment gateways are not always instantiated in this REST context, so Cardcom's
-			// own woocommerce_order_status_completed hook may not run. Trigger the J5 capture
-			// explicitly so the token is charged when Aviv finalizes the order.
-			self::maybe_capture_cardcom( $order, $logger );
 		}
 
 		// Return response
