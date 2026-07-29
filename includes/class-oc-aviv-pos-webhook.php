@@ -283,12 +283,24 @@ class OC_Aviv_Pos_Webhook {
 			// context, so Cardcom's own status-completed hook may not fire either.
 			self::maybe_capture_cardcom( $order, $logger );
 
-			$order->update_status( 'wc-completed', __( 'הזמנה הושלמה לאחר עדכון כמויות מ-Aviv POS', 'oc-aviv-pos' ) );
-			$order->save();
-			$logger->info( 
-				sprintf( 'Aviv POS Webhook: Order %s marked as completed after items update', $order->get_order_number() ),
-				[ 'source' => 'oc-aviv-pos-webhook', 'order_id' => $order->get_id() ]
-			);
+			// Completing the order fires the customer completed-order email and other hooks,
+			// which can fatal inside third-party plugins (e.g. the units plugin on product-less
+			// custom lines). Guard the whole completion so a broken email/hook never turns our
+			// webhook into an HTTP 500 for Aviv — the order is completed and the token already
+			// charged above; we still return the proper JSON response built earlier.
+			try {
+				$order->update_status( 'wc-completed', __( 'הזמנה הושלמה לאחר עדכון כמויות מ-Aviv POS', 'oc-aviv-pos' ) );
+				$order->save();
+				$logger->info( 
+					sprintf( 'Aviv POS Webhook: Order %s marked as completed after items update', $order->get_order_number() ),
+					[ 'source' => 'oc-aviv-pos-webhook', 'order_id' => $order->get_id() ]
+				);
+			} catch ( \Throwable $t ) {
+				$logger->error(
+					sprintf( 'Aviv POS Webhook: Order %s completed and charged, but a post-completion hook failed: %s', $order->get_order_number(), $t->getMessage() ),
+					[ 'source' => 'oc-aviv-pos-webhook', 'order_id' => $order->get_id() ]
+				);
+			}
 		}
 
 		// Return response
