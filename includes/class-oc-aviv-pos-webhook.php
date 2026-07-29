@@ -458,7 +458,15 @@ class OC_Aviv_Pos_Webhook {
 			$type        = isset( $row['itemType'] ) ? (string) $row['itemType'] : 'PRODUCT';
 
 			$is_text = ( $rid === '' || $type === 'TEXT' );
-			$key     = $is_text ? ( 'text::' . $desc ) : ( 'sku::' . $rid );
+
+			// Aviv sends the delivery charge (and other ad-hoc charges) as TEXT rows with no id.
+			// The WooCommerce order already carries its own shipping/fees, so skipping TEXT rows
+			// avoids a duplicate "delivery" product line; Aviv's authoritative total still covers them.
+			if ( $is_text ) {
+				continue;
+			}
+
+			$key = 'sku::' . $rid;
 
 			if ( ! isset( $agg[ $key ] ) ) {
 				$agg[ $key ] = [ 'id' => $rid, 'desc' => $desc, 'is_text' => $is_text, 'count' => 0.0, 'total_agorot' => 0.0 ];
