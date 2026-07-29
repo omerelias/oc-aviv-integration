@@ -185,12 +185,18 @@ class OC_Aviv_Pos_Webhook {
 		$updated_count = 0;
 		$is_items_update = false;
 		
+		$should_finalize = false; // charge + complete only on an items edit or a COMMITTED status
 		if ( ! empty( $data['type'] ) ) {
-			// Status update
+			// Status update (handle_status_update_for_order already maps it: OPEN/ACCEPTED->processing,
+			// COMMITTED->completed, CANCELLED->cancelled).
 			self::handle_status_update_for_order( $order, $data, $logger );
+			if ( 'COMMITTED' === strtoupper( sanitize_text_field( (string) $data['type'] ) ) ) {
+				$should_finalize = true; // POS marked the order delivered/committed
+			}
 		} elseif ( ! empty( $data['items'] ) && is_array( $data['items'] ) ) {
-			// Items update
+			// Items update (Aviv finalized the basket)
 			$is_items_update = true;
+			$should_finalize = true;
 			$updated_count = self::handle_items_update_for_order( $order, $data, $logger );
 		} else {
 			$logger->warning( 'Aviv POS Webhook: Unknown webhook type (no type or items)', [ 'source' => 'oc-aviv-pos-webhook', 'order_id' => $order->get_id() ] );
@@ -274,14 +280,25 @@ class OC_Aviv_Pos_Webhook {
 			);
 		}
 
-		// If this was an items update, mark order as completed at the end
-		if ( $success ) {
+		// Finalize (charge the J5 token + mark completed) ONLY on an items edit or a COMMITTED
+		// status. Never on OPEN/ACCEPTED (processing), CANCELLED (cancelled) or an unknown webhook —
+		// otherwise a cancel/early status webhook would wrongly charge and complete the order.
+		if ( $success && $should_finalize ) {
 			// Charge the Cardcom J5 token BEFORE completing the order. Marking it completed sends
 			// the customer completed-order email, which can fatal inside a third-party plugin
 			// (e.g. the units plugin on product-less custom lines) and abort the request before
 			// the capture would run. Gateways are also not always instantiated in this REST
 			// context, so Cardcom's own status-completed hook may not fire either.
-			self::maybe_capture_cardcom( $order, $logger );
+			// Wrap the charge too: order_capture_payment is an external Cardcom call — if it throws
+			// after charging, we must still return 200 so Aviv does not retry and double-charge.
+			try {
+				self::maybe_capture_cardcom( $order, $logger );
+			} catch ( \Throwable $ct ) {
+				$logger->error(
+					sprintf( 'Aviv POS Webhook: Order %s capture raised after/around charging: %s', $order->get_order_number(), $ct->getMessage() ),
+					[ 'source' => 'oc-aviv-pos-webhook', 'order_id' => $order->get_id() ]
+				);
+			}
 
 			// Completing the order fires the customer completed-order email and other hooks,
 			// which can fatal inside third-party plugins (e.g. the units plugin on product-less
@@ -318,7 +335,10 @@ class OC_Aviv_Pos_Webhook {
 	}
 
 	/**
-	 * Trigger the Cardcom J5 capture explicitly (gateway hook may not be registered in REST).
+	 * Find order by share token (order number).
+	 *
+	 * @param string $share_token Order number.
+	 * @return WC_Order|null
 	 */
 	private static function maybe_capture_cardcom( WC_Order $order, $logger ): void {
 		if ( 'cardcom' !== $order->get_payment_method() ) {
@@ -339,15 +359,14 @@ class OC_Aviv_Pos_Webhook {
 		}
 	}
 
-	/**
-	 * Find order by share token (order number).
-	 *
-	 * @param string $share_token Order number.
-	 * @return WC_Order|null
-	 */
 	private static function find_order_by_share_token( string $share_token ): ?WC_Order {
 		// Try by ID first
 		$order = wc_get_order( $share_token );
+		// wc_get_order treats the token as a post ID; only accept it if the order NUMBER matches,
+		// otherwise a custom order-number scheme could load a different order by its ID.
+		if ( $order && (string) $order->get_order_number() !== (string) $share_token ) {
+			$order = null;
+		}
 		
 		// If not found by ID, try to find by order number meta
 		if ( ! $order ) {
@@ -481,9 +500,16 @@ class OC_Aviv_Pos_Webhook {
 		// Index existing order line items so we can update them in place (keeps weighable meta).
 		$existing = [];
 		foreach ( $order->get_items() as $lid => $line ) {
-			$p   = $line->get_product();
-			$sku = $p ? ( $p->get_sku() ?: (string) $p->get_id() ) : '';
-			$k   = ( $sku !== '' ) ? ( 'sku::' . $sku ) : ( 'text::' . $line->get_name() );
+			$p        = $line->get_product();
+			$sku      = $p ? ( $p->get_sku() ?: (string) $p->get_id() ) : '';
+			$aviv_sku = (string) $line->get_meta( '_aviv_sku' );
+			if ( $sku !== '' ) {
+				$k = 'sku::' . $sku;
+			} elseif ( $aviv_sku !== '' ) {
+				$k = 'sku::' . $aviv_sku; // Aviv-only custom line: match on re-sync instead of churning
+			} else {
+				$k = 'text::' . $line->get_name();
+			}
 			$existing[ $k ] = $lid;
 		}
 

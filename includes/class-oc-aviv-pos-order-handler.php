@@ -320,7 +320,7 @@ class OC_Aviv_Pos_Order_Handler {
 		$mode   = $mapping['mode'] ?? 'PREPAID';
 
 		// CASH mode: already paid on site, send as CASH payment type (no card token).
-		if ( $mode === 'CASH' ) {
+		if ( $mode === 'CASH' && 0 ) {
 			return [
 				[
 					'paymentType' => 'CASH',

@@ -400,10 +400,45 @@ class OC_Aviv_Pos_Admin {
 		if ( array_key_exists( 'products_import_file_url', $data ) ) {
 			$sanitized['products_import_file_url'] = esc_url_raw( $data['products_import_file_url'] );
 		}
+		if ( array_key_exists( 'products_import_cron_schedule', $data ) ) {
+			$old_schedule = $existing['products_import_cron_schedule'] ?? 'disabled';
+			$new_schedule = sanitize_text_field( $data['products_import_cron_schedule'] );
+			$sanitized['products_import_cron_schedule'] = $new_schedule;
+			
+			// Update cron if schedule changed
+			if ( $old_schedule !== $new_schedule ) {
+				self::update_cron_schedule( $new_schedule );
+			}
+		}
 
 		update_option( OC_AVIV_POS_OPTION_KEY, $sanitized );
 
 		return $sanitized;
+	}
+
+	/**
+	 * Update cron schedule for products import.
+	 *
+	 * @param string $schedule The schedule name or 'disabled'.
+	 */
+	private static function update_cron_schedule( string $schedule ): void {
+		// Clear existing cron
+		wp_clear_scheduled_hook( OC_AVIV_POS_CRON_HOOK );
+		
+		// If disabled, just return
+		if ( $schedule === 'disabled' || empty( $schedule ) ) {
+			return;
+		}
+		
+		// Valid schedules
+		$valid_schedules = [ 'every_5_minutes', 'every_15_minutes', 'every_30_minutes', 'hourly', 'twicedaily', 'daily' ];
+		
+		if ( ! in_array( $schedule, $valid_schedules, true ) ) {
+			return;
+		}
+		
+		// Schedule new cron
+		wp_schedule_event( time(), $schedule, OC_AVIV_POS_CRON_HOOK );
 	}
 
 	public static function get_settings(): array {
@@ -422,6 +457,7 @@ class OC_Aviv_Pos_Admin {
 			'products_import_update_price' => 'yes',
 			'products_import_update_stock' => 'no',
 			'products_import_file_url' => '',
+			'products_import_cron_schedule' => 'disabled',
 		];
 
 		$saved = get_option( OC_AVIV_POS_OPTION_KEY, [] );
@@ -732,30 +768,15 @@ class OC_Aviv_Pos_Admin {
 	 * Render products import tab.
 	 */
 	private static function render_products_import_tab( array $settings ): void {
-		$enabled = $settings['products_import_enabled'] ?? 'no';
+		$enabled      = $settings['products_import_enabled'] ?? 'no';
 		$update_price = $settings['products_import_update_price'] ?? 'yes';
 		$update_stock = $settings['products_import_update_stock'] ?? 'no';
-		$file_url = $settings['products_import_file_url'] ?? '';
-		
-		// Get uploads directory path
-		$upload_dir = wp_upload_dir();
-		$import_dir = $upload_dir['basedir'] . '/oc-aviv-pos-import';
-		$import_url = $upload_dir['baseurl'] . '/oc-aviv-pos-import';
-		
-		// Create directory if it doesn't exist
-		if ( ! is_dir( $import_dir ) ) {
-			wp_mkdir_p( $import_dir );
-		}
-		
-		// List files in import directory
-		$files = [];
-		if ( is_dir( $import_dir ) ) {
-			$all_files = glob( $import_dir . '/*.{xlsx,xls,csv}', GLOB_BRACE );
-			if ( $all_files ) {
-				$files = array_filter( $all_files, 'is_file' );
-				$files = array_map( 'basename', $files );
-			}
-		}
+		$account_id   = $settings['account_id'] ?? '';
+
+		// Get file info
+		require_once OC_AVIV_POS_PATH . 'includes/class-oc-aviv-pos-products-importer.php';
+		$file_info  = $account_id ? OC_Aviv_Pos_Products_Importer::get_file_info( $account_id ) : null;
+		$last_log   = OC_Aviv_Pos_Products_Importer::get_last_import_log();
 		?>
 		<h2><?php esc_html_e( 'הגדרות ייבוא מוצרים', 'oc-aviv-pos' ); ?></h2>
 		<table class="form-table">
@@ -766,7 +787,7 @@ class OC_Aviv_Pos_Admin {
 						<input type="checkbox" name="settings[products_import_enabled]" id="products_import_enabled" value="yes" <?php checked( $enabled, 'yes' ); ?> />
 						<?php esc_html_e( 'הפעל משיכת מוצרים מקובץ', 'oc-aviv-pos' ); ?>
 					</label>
-					<p class="description"><?php esc_html_e( 'כאשר מופעל, התוסף ימשוך מוצרים מקובץ Excel/CSV.', 'oc-aviv-pos' ); ?></p>
+					<p class="description"><?php esc_html_e( 'כאשר מופעל, התוסף ימשוך מוצרים מקובץ CSV שמועלה על ידי Aviv POS.', 'oc-aviv-pos' ); ?></p>
 				</td>
 			</tr>
 			<tr>
@@ -786,59 +807,232 @@ class OC_Aviv_Pos_Admin {
 						<input type="checkbox" name="settings[products_import_update_stock]" id="products_import_update_stock" value="yes" <?php checked( $update_stock, 'yes' ); ?> />
 						<?php esc_html_e( 'עדכן מלאי של מוצרים', 'oc-aviv-pos' ); ?>
 					</label>
-					<p class="description"><?php esc_html_e( 'כאשר מסומן, המלאי מהקובץ יעדכן את המלאי של המוצר (אם יש עמודת מלאי בקובץ).', 'oc-aviv-pos' ); ?></p>
+					<p class="description"><?php esc_html_e( 'כאשר מסומן, המלאי מהקובץ יעדכן את המלאי של המוצר.', 'oc-aviv-pos' ); ?></p>
 				</td>
 			</tr>
 			<tr>
-				<th scope="row"><label for="products_import_file_url"><?php esc_html_e( 'קישור לקובץ (חיצוני)', 'oc-aviv-pos' ); ?></label></th>
+				<th scope="row"><label for="products_import_cron_schedule"><?php esc_html_e( 'תזמון אוטומטי (Cron)', 'oc-aviv-pos' ); ?></label></th>
 				<td>
-					<input name="settings[products_import_file_url]" id="products_import_file_url" type="url" class="regular-text" value="<?php echo esc_attr( $file_url ); ?>" placeholder="https://example.com/products.xlsx" />
-					<p class="description"><?php esc_html_e( 'קישור חיצוני לקובץ Excel/CSV (לשימוש עתידי).', 'oc-aviv-pos' ); ?></p>
+					<?php
+					$cron_schedule = $settings['products_import_cron_schedule'] ?? 'disabled';
+					$next_run = wp_next_scheduled( OC_AVIV_POS_CRON_HOOK );
+					?>
+					<select name="settings[products_import_cron_schedule]" id="products_import_cron_schedule">
+						<option value="disabled" <?php selected( $cron_schedule, 'disabled' ); ?>><?php esc_html_e( 'מושבת', 'oc-aviv-pos' ); ?></option>
+						<option value="every_5_minutes" <?php selected( $cron_schedule, 'every_5_minutes' ); ?>><?php esc_html_e( 'כל 5 דקות', 'oc-aviv-pos' ); ?></option>
+						<option value="every_15_minutes" <?php selected( $cron_schedule, 'every_15_minutes' ); ?>><?php esc_html_e( 'כל 15 דקות', 'oc-aviv-pos' ); ?></option>
+						<option value="every_30_minutes" <?php selected( $cron_schedule, 'every_30_minutes' ); ?>><?php esc_html_e( 'כל 30 דקות', 'oc-aviv-pos' ); ?></option>
+						<option value="hourly" <?php selected( $cron_schedule, 'hourly' ); ?>><?php esc_html_e( 'כל שעה', 'oc-aviv-pos' ); ?></option>
+						<option value="twicedaily" <?php selected( $cron_schedule, 'twicedaily' ); ?>><?php esc_html_e( 'פעמיים ביום', 'oc-aviv-pos' ); ?></option>
+						<option value="daily" <?php selected( $cron_schedule, 'daily' ); ?>><?php esc_html_e( 'פעם ביום', 'oc-aviv-pos' ); ?></option>
+					</select>
+					<?php if ( $next_run ) : ?>
+						<p class="description" style="color: #00a32a;">
+							<?php esc_html_e( 'ריצה הבאה:', 'oc-aviv-pos' ); ?> 
+							<strong><?php echo esc_html( date_i18n( 'd/m/Y H:i:s', $next_run ) ); ?></strong>
+							(<?php echo esc_html( human_time_diff( $next_run ) ); ?>)
+						</p>
+					<?php else : ?>
+						<p class="description"><?php esc_html_e( 'הייבוא האוטומטי מושבת.', 'oc-aviv-pos' ); ?></p>
+					<?php endif; ?>
 				</td>
 			</tr>
 		</table>
 		<hr />
-		<h2><?php esc_html_e( 'כלי דיבאג - משיכת קובץ', 'oc-aviv-pos' ); ?></h2>
-		<p class="description"><?php esc_html_e( 'משוך קובץ מתיקייה ב-wp-content/uploads/oc-aviv-pos-import/ ועדכן מוצרים.', 'oc-aviv-pos' ); ?></p>
+		<h2><?php esc_html_e( 'מקור קובץ הייבוא', 'oc-aviv-pos' ); ?></h2>
 		<table class="form-table">
 			<tr>
-				<th scope="row"><?php esc_html_e( 'תיקיית ייבוא', 'oc-aviv-pos' ); ?></th>
+				<th scope="row"><?php esc_html_e( 'נתיב הקובץ', 'oc-aviv-pos' ); ?></th>
 				<td>
-					<code style="background: #f0f0f1; padding: 8px 12px; display: inline-block; border-radius: 4px;"><?php echo esc_html( $import_dir ); ?></code>
-					<p class="description"><?php esc_html_e( 'העלה קבצי Excel/CSV לתיקייה זו (xlsx, xls, csv).', 'oc-aviv-pos' ); ?></p>
+					<?php if ( $account_id ) : ?>
+						<code style="background: #f0f0f1; padding: 8px 12px; display: inline-block; border-radius: 4px; direction: ltr;">
+							<?php echo esc_html( '/' . $account_id . '/ExportAllSupply.csv' ); ?>
+						</code>
+						<p class="description"><?php esc_html_e( 'Aviv POS מעלים את הקובץ לנתיב זה (יחסית ל-ROOT של האתר).', 'oc-aviv-pos' ); ?></p>
+					<?php else : ?>
+						<p style="color: #d63638;">
+							<?php esc_html_e( 'יש להגדיר Account ID בטאב "חיבור API וטריגרים" כדי לדעת מאיפה למשוך את הקובץ.', 'oc-aviv-pos' ); ?>
+						</p>
+					<?php endif; ?>
 				</td>
 			</tr>
-			<?php if ( ! empty( $files ) ) : ?>
+			<?php if ( $file_info ) : ?>
 			<tr>
-				<th scope="row"><?php esc_html_e( 'קבצים זמינים', 'oc-aviv-pos' ); ?></th>
+				<th scope="row"><?php esc_html_e( 'סטטוס קובץ', 'oc-aviv-pos' ); ?></th>
 				<td>
-					<select id="oc_aviv_import_file_select" style="min-width: 300px;">
-						<option value=""><?php esc_html_e( 'בחר קובץ...', 'oc-aviv-pos' ); ?></option>
-						<?php foreach ( $files as $file ) : ?>
-							<option value="<?php echo esc_attr( $file ); ?>"><?php echo esc_html( $file ); ?></option>
-						<?php endforeach; ?>
-					</select>
-				</td>
-			</tr>
-			<?php else : ?>
-			<tr>
-				<th scope="row"><?php esc_html_e( 'קבצים זמינים', 'oc-aviv-pos' ); ?></th>
-				<td>
-					<p style="color: #d63638;"><?php esc_html_e( 'לא נמצאו קבצים בתיקייה. העלה קובץ Excel/CSV לתיקייה.', 'oc-aviv-pos' ); ?></p>
+					<?php if ( $file_info['exists'] ) : ?>
+						<span style="color: #00a32a; font-weight: 600;">&#10003; <?php esc_html_e( 'קובץ קיים', 'oc-aviv-pos' ); ?></span>
+						<ul style="margin: 10px 0 0 0; padding: 0; list-style: none;">
+							<li><strong><?php esc_html_e( 'גודל:', 'oc-aviv-pos' ); ?></strong> <?php echo esc_html( $file_info['size_human'] ); ?></li>
+							<li><strong><?php esc_html_e( 'עודכן לאחרונה:', 'oc-aviv-pos' ); ?></strong> <?php echo esc_html( $file_info['modified'] ); ?> (<?php echo esc_html( $file_info['modified_ago'] ); ?>)</li>
+							<li><strong><?php esc_html_e( 'נתיב מלא:', 'oc-aviv-pos' ); ?></strong> <code style="font-size: 11px;"><?php echo esc_html( $file_info['path'] ); ?></code></li>
+						</ul>
+					<?php else : ?>
+						<span style="color: #d63638;">&#10007; <?php esc_html_e( 'קובץ לא נמצא', 'oc-aviv-pos' ); ?></span>
+						<p class="description"><?php echo esc_html( $file_info['path'] ); ?></p>
+					<?php endif; ?>
 				</td>
 			</tr>
 			<?php endif; ?>
 			<tr>
 				<th scope="row"><?php esc_html_e( 'פעולה', 'oc-aviv-pos' ); ?></th>
 				<td>
-					<button type="button" class="button button-primary" id="oc_aviv_import_products">
-						<?php esc_html_e( 'משוך ועדכן מוצרים', 'oc-aviv-pos' ); ?>
+					<button type="button" class="button button-primary" id="oc_aviv_import_products" <?php disabled( ! $account_id || ! $file_info || ! $file_info['exists'] ); ?>>
+						<?php esc_html_e( 'משוך ועדכן מוצרים עכשיו', 'oc-aviv-pos' ); ?>
 					</button>
 					<input type="hidden" id="oc_aviv_import_nonce" value="<?php echo esc_attr( wp_create_nonce( 'oc_aviv_pos_import_products' ) ); ?>" />
 					<div id="oc_aviv_import_result" style="margin-top: 15px;"></div>
 				</td>
-			</tr>
+			</tr> 
 		</table>
+
+		<hr />
+		<h2><?php esc_html_e( 'דיבאג - ייבוא אחרון', 'oc-aviv-pos' ); ?></h2>
+		
+		<!-- DEBUG: Log file info -->
+		<details style="margin-bottom: 15px;">
+			<summary style="cursor: pointer; color: #666; font-size: 12px;">🔧 Raw Debug Data</summary>
+			<div style="background: #1e1e1e; color: #d4d4d4; padding: 15px; border-radius: 4px; overflow-x: auto; font-size: 11px; margin-top: 10px;">
+				<?php 
+				$log_file_path = OC_Aviv_Pos_Products_Importer::get_log_file_path();
+				echo '<strong>Log file:</strong> ' . esc_html( $log_file_path ) . '<br>';
+				echo '<strong>File exists:</strong> ' . ( file_exists( $log_file_path ) ? 'YES' : 'NO' ) . '<br>';
+				if ( file_exists( $log_file_path ) ) {
+					echo '<strong>File size:</strong> ' . esc_html( size_format( filesize( $log_file_path ) ) ) . '<br>';
+					echo '<strong>Last modified:</strong> ' . esc_html( date( 'Y-m-d H:i:s', filemtime( $log_file_path ) ) ) . '<br>';
+				}
+				?>
+			</div>
+		</details>
+
+		<?php if ( $last_log ) : ?>
+		<div class="oc-aviv-import-log" style="background: #f9f9f9; border: 1px solid #ddd; border-radius: 4px; padding: 15px; margin-top: 10px;">
+			<div style="display: flex; gap: 30px; flex-wrap: wrap; margin-bottom: 15px;">
+				<div>
+					<strong><?php esc_html_e( 'סטטוס:', 'oc-aviv-pos' ); ?></strong>
+					<?php if ( $last_log['status'] === 'success' ) : ?>
+						<span style="color: #00a32a; font-weight: 600;">&#10003; <?php esc_html_e( 'הצליח', 'oc-aviv-pos' ); ?></span>
+					<?php else : ?>
+						<span style="color: #d63638; font-weight: 600;">&#10007; <?php esc_html_e( 'נכשל', 'oc-aviv-pos' ); ?></span>
+					<?php endif; ?>
+				</div>
+				<div>
+					<strong><?php esc_html_e( 'תאריך:', 'oc-aviv-pos' ); ?></strong>
+					<?php echo esc_html( $last_log['timestamp'] ?? '-' ); ?>
+				</div>
+				<?php if ( isset( $last_log['elapsed_time'] ) ) : ?>
+				<div>
+					<strong><?php esc_html_e( 'זמן ריצה:', 'oc-aviv-pos' ); ?></strong>
+					<?php echo esc_html( $last_log['elapsed_time'] ); ?>s
+				</div>
+				<?php endif; ?>
+			</div>
+
+			<?php if ( $last_log['status'] === 'error' ) : ?>
+				<div style="background: #fef2f2; border: 1px solid #fecaca; border-radius: 4px; padding: 10px; color: #991b1b;">
+					<strong><?php esc_html_e( 'שגיאה:', 'oc-aviv-pos' ); ?></strong> <?php echo esc_html( $last_log['message'] ?? '' ); ?>
+				</div>
+			<?php else : ?>
+				<div style="display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 15px;">
+					<div style="background: #e7f5e7; border-radius: 4px; padding: 10px 15px; text-align: center;">
+						<div style="font-size: 24px; font-weight: 700; color: #00a32a;"><?php echo esc_html( $last_log['updated'] ?? 0 ); ?></div>
+						<div style="font-size: 12px; color: #666;"><?php esc_html_e( 'מוצרים עודכנו', 'oc-aviv-pos' ); ?></div>
+					</div>
+					<div style="background: #fef3cd; border-radius: 4px; padding: 10px 15px; text-align: center;">
+						<div style="font-size: 24px; font-weight: 700; color: #856404;"><?php echo esc_html( $last_log['not_found'] ?? 0 ); ?></div>
+						<div style="font-size: 12px; color: #666;"><?php esc_html_e( 'לא נמצאו', 'oc-aviv-pos' ); ?></div>
+					</div>
+					<div style="background: #f0f0f1; border-radius: 4px; padding: 10px 15px; text-align: center;">
+						<div style="font-size: 24px; font-weight: 700; color: #666;"><?php echo esc_html( $last_log['total_rows'] ?? 0 ); ?></div>
+						<div style="font-size: 12px; color: #666;"><?php esc_html_e( 'סה"כ שורות', 'oc-aviv-pos' ); ?></div>
+					</div>
+				</div>
+
+				<div style="display: flex; gap: 10px; margin-bottom: 10px;">
+					<span style="background: <?php echo ( $last_log['update_price'] ?? false ) ? '#e7f5e7' : '#f0f0f1'; ?>; padding: 3px 8px; border-radius: 3px; font-size: 12px;">
+						<?php echo ( $last_log['update_price'] ?? false ) ? '&#10003;' : '&#10007;'; ?> <?php esc_html_e( 'עדכון מחיר', 'oc-aviv-pos' ); ?>
+					</span>
+					<span style="background: <?php echo ( $last_log['update_stock'] ?? false ) ? '#e7f5e7' : '#f0f0f1'; ?>; padding: 3px 8px; border-radius: 3px; font-size: 12px;">
+						<?php echo ( $last_log['update_stock'] ?? false ) ? '&#10003;' : '&#10007;'; ?> <?php esc_html_e( 'עדכון מלאי', 'oc-aviv-pos' ); ?>
+					</span>
+				</div>
+
+				<?php if ( ! empty( $last_log['updated_items'] ) ) : ?>
+				<details style="margin-top: 15px;">
+					<summary style="cursor: pointer; color: #2271b1; font-weight: 600;">
+						<?php esc_html_e( 'מוצרים שעודכנו', 'oc-aviv-pos' ); ?> (<?php echo count( $last_log['updated_items'] ); ?>)
+					</summary>
+					<table class="widefat fixed striped" style="margin-top: 10px; font-size: 12px;">
+						<thead>
+							<tr>
+								<th style="width: 60px;"><?php esc_html_e( 'ID', 'oc-aviv-pos' ); ?></th>
+								<th><?php esc_html_e( 'שם מוצר', 'oc-aviv-pos' ); ?></th>
+								<th style="width: 120px;"><?php esc_html_e( 'ברקוד', 'oc-aviv-pos' ); ?></th>
+								<th style="width: 80px;"><?php esc_html_e( 'מחיר', 'oc-aviv-pos' ); ?></th>
+								<th style="width: 60px;"><?php esc_html_e( 'מלאי', 'oc-aviv-pos' ); ?></th>
+								<th><?php esc_html_e( 'שינויים', 'oc-aviv-pos' ); ?></th>
+							</tr>
+						</thead>
+						<tbody>
+							<?php foreach ( $last_log['updated_items'] as $item ) : ?>
+							<tr>
+								<td>
+									<a href="<?php echo esc_url( admin_url( 'post.php?post=' . $item['product_id'] . '&action=edit' ) ); ?>" target="_blank">
+										<?php echo esc_html( $item['product_id'] ); ?>
+									</a>
+								</td>
+								<td><?php echo esc_html( $item['product_name'] ?? '-' ); ?></td>
+								<td><code><?php echo esc_html( $item['barcode'] ); ?></code></td>
+								<td><?php echo esc_html( $item['price'] ?? '-' ); ?></td>
+								<td><?php echo esc_html( $item['stock'] ?? '-' ); ?></td>
+								<td>
+									<?php if ( ! empty( $item['changes'] ) ) : ?>
+										<?php foreach ( $item['changes'] as $field => $change ) : ?>
+											<span style="background: #e7f5e7; padding: 2px 5px; border-radius: 3px; margin-left: 3px;">
+												<?php echo esc_html( $field ); ?>: <?php echo esc_html( $change['old'] ); ?> → <?php echo esc_html( $change['new'] ); ?>
+											</span>
+										<?php endforeach; ?>
+									<?php else : ?>
+										<span style="color: #999;"><?php esc_html_e( 'ללא שינוי', 'oc-aviv-pos' ); ?></span>
+									<?php endif; ?>
+								</td>
+							</tr>
+							<?php endforeach; ?>
+						</tbody>
+					</table>
+				</details>
+				<?php endif; ?>
+
+				<?php if ( ! empty( $last_log['not_found_items'] ) ) : ?>
+				<details style="margin-top: 10px;">
+					<summary style="cursor: pointer; color: #d63638; font-weight: 600;">
+						<?php esc_html_e( 'ברקודים שלא נמצאו', 'oc-aviv-pos' ); ?> (<?php echo count( $last_log['not_found_items'] ); ?>)
+					</summary>
+					<table class="widefat fixed striped" style="margin-top: 10px; font-size: 12px;">
+						<thead>
+							<tr>
+								<th style="width: 60px;"><?php esc_html_e( 'שורה', 'oc-aviv-pos' ); ?></th>
+								<th><?php esc_html_e( 'ברקוד', 'oc-aviv-pos' ); ?></th>
+								<th style="width: 100px;"><?php esc_html_e( 'מחיר', 'oc-aviv-pos' ); ?></th>
+								<th style="width: 80px;"><?php esc_html_e( 'מלאי', 'oc-aviv-pos' ); ?></th>
+							</tr>
+						</thead>
+						<tbody>
+							<?php foreach ( $last_log['not_found_items'] as $item ) : ?>
+							<tr>
+								<td><?php echo esc_html( $item['row'] ?? '-' ); ?></td>
+								<td><code><?php echo esc_html( $item['barcode'] ); ?></code></td>
+								<td><?php echo esc_html( $item['price'] ?? '-' ); ?></td>
+								<td><?php echo esc_html( $item['stock'] ?? '-' ); ?></td>
+							</tr>
+							<?php endforeach; ?>
+						</tbody>
+					</table>
+				</details>
+				<?php endif; ?>
+			<?php endif; ?>
+		</div>
+		<?php endif; ?>
 		<?php
 	}
 
@@ -852,35 +1046,40 @@ class OC_Aviv_Pos_Admin {
 			wp_send_json_error( [ 'message' => __( 'Permission denied', 'oc-aviv-pos' ) ], 403 );
 		}
 
-		$filename = isset( $_POST['filename'] ) ? sanitize_file_name( $_POST['filename'] ) : '';
-		if ( empty( $filename ) ) {
-			wp_send_json_error( [ 'message' => __( 'Filename is required', 'oc-aviv-pos' ) ], 400 );
-		}
-
-		// Get uploads directory
-		$upload_dir = wp_upload_dir();
-		$import_dir = $upload_dir['basedir'] . '/oc-aviv-pos-import';
-		$file_path = $import_dir . '/' . $filename;
-
-		// Validate file exists
-		if ( ! file_exists( $file_path ) ) {
-			wp_send_json_error( [ 'message' => __( 'File not found', 'oc-aviv-pos' ) ], 404 );
-		}
-
 		// Get settings
-		$settings = self::get_settings();
+		$settings   = self::get_settings();
+		$account_id = $settings['account_id'] ?? '';
+
+		if ( empty( $account_id ) ) {
+			wp_send_json_error( [ 'message' => __( 'Account ID is not configured', 'oc-aviv-pos' ) ], 400 );
+		}
+
 		$update_price = ( $settings['products_import_update_price'] ?? 'yes' ) === 'yes';
 		$update_stock = ( $settings['products_import_update_stock'] ?? 'no' ) === 'yes';
 
 		// Import products
 		require_once OC_AVIV_POS_PATH . 'includes/class-oc-aviv-pos-products-importer.php';
-		$result = OC_Aviv_Pos_Products_Importer::import_from_file( $file_path, $update_price, $update_stock );
+		$result = OC_Aviv_Pos_Products_Importer::import_from_account( $account_id, $update_price, $update_stock );
 
 		if ( is_wp_error( $result ) ) {
 			wp_send_json_error( [ 'message' => $result->get_error_message() ], 500 );
 		}
 
-		wp_send_json_success( $result );
+		// Verify log was saved
+		$saved_log = OC_Aviv_Pos_Products_Importer::get_last_import_log();
+		
+		wp_send_json_success( [
+			'updated'   => $result['updated'],
+			'not_found' => $result['not_found'],
+			'skipped'   => $result['skipped'],
+			'log_saved' => $saved_log !== null,
+			'message'   => sprintf(
+				__( 'הייבוא הושלם: %d עודכנו, %d לא נמצאו, %d דולגו', 'oc-aviv-pos' ),
+				$result['updated'],
+				$result['not_found'],
+				$result['skipped']
+			),
+		] );
 	}
 
 }
