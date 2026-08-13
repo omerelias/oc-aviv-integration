@@ -109,12 +109,17 @@ class OC_Aviv_Pos_Products_Importer {
 		// Process products
 		$results = [
 			'updated'       => 0,
+			'unchanged'     => 0,
 			'not_found'     => 0,
 			'skipped'       => 0,
 			'errors'        => [],
 			'updated_items' => [],
 			'not_found_items' => [],
+			'skipped_items' => [],
 		];
+
+		// Variable-product parents whose variations we touched; re-synced after the loop.
+		$parents_to_sync = [];
 
 		foreach ( $data as $row_index => $row ) {
 			$barcode = $row['barcode'] ?? '';
@@ -154,30 +159,85 @@ class OC_Aviv_Pos_Products_Importer {
 				continue;
 			}
 
-			$old_price = $product->get_regular_price();
-			$old_stock = $product->get_stock_quantity();
-			$changes   = [];
+			// A variable product's shown price is derived from its variations, so the price
+			// must be written to the variations (not the parent). resolve_price_targets()
+			// returns the concrete products to write plus the parent id (if any) to re-sync.
+			$parent_id = null;
+			$ambiguous = false;
+			$targets   = self::resolve_price_targets( $product, $barcode, $parent_id, $ambiguous );
 
-			// Update price
-			if ( $update_price && $price !== null ) {
-				$product->set_regular_price( $price );
-				$product->set_price( $price );
-				if ( (float) $old_price !== (float) $price ) {
-					$changes['price'] = [ 'old' => $old_price, 'new' => $price ];
+			if ( empty( $targets ) ) {
+				// Matched a product but nothing safe to price: a variable parent whose variations
+				// neither carry the barcode nor share one uniform price, or a variable product with
+				// no variations. Skip rather than guess, and surface it in the log.
+				$results['skipped']++;
+				$results['skipped_items'][] = [
+					'barcode' => $barcode,
+					'price'   => $price,
+					'reason'  => $ambiguous ? 'variable_ambiguous' : 'no_targets',
+					'row'     => $row_index + 2,
+				];
+				$logger->warning( sprintf( 'Skipped barcode %s (product %d): no unambiguous price target (row %d)', $barcode, $product_id, $row_index + 2 ), $ctx );
+				continue;
+			}
+
+			$changes     = [];
+			$row_changed = false;
+
+			foreach ( $targets as $target ) {
+				$target_changed = false;
+
+				// Update price
+				if ( $update_price && $price !== null ) {
+					$old_regular = $target->get_regular_price();
+
+					$target->set_regular_price( (string) $price );
+
+					// Keep the active price consistent with any still-valid sale; clear a sale that
+					// is no longer below the new regular price so we never leave _price inconsistent.
+					$sale_price = $target->get_sale_price( 'edit' );
+					if ( $sale_price !== '' && $sale_price !== null && (float) $sale_price < (float) $price ) {
+						$target->set_price( (string) $sale_price );
+					} else {
+						if ( $sale_price !== '' && $sale_price !== null ) {
+							$target->set_sale_price( '' );
+						}
+						$target->set_price( (string) $price );
+					}
+
+					if ( (float) $old_regular !== (float) $price ) {
+						$target_changed  = true;
+						$changes['price'] = [ 'old' => ( '' === $old_regular ? null : $old_regular ), 'new' => $price ];
+					}
+				}
+
+				// Update stock
+				if ( $update_stock && $stock !== null ) {
+					$old_stock = $target->get_stock_quantity();
+					$target->set_stock_quantity( $stock );
+					$target->set_manage_stock( true );
+					if ( (int) $old_stock !== (int) $stock ) {
+						$target_changed  = true;
+						$changes['stock'] = [ 'old' => $old_stock, 'new' => $stock ];
+					}
+				}
+
+				// Only persist (and incur a DB write + cache flush) when something actually changed.
+				if ( $target_changed ) {
+					$target->save();
+					$row_changed = true;
 				}
 			}
 
-			// Update stock
-			if ( $update_stock && $stock !== null ) {
-				$product->set_stock_quantity( $stock );
-				$product->set_manage_stock( true );
-				if ( (int) $old_stock !== (int) $stock ) {
-					$changes['stock'] = [ 'old' => $old_stock, 'new' => $stock ];
-				}
+			if ( ! $row_changed ) {
+				$results['unchanged']++;
+				continue;
 			}
 
-			// Save product
-			$product->save();
+			if ( $parent_id ) {
+				$parents_to_sync[ $parent_id ] = true;
+			}
+
 			$results['updated']++;
 
 			$results['updated_items'][] = [
@@ -193,9 +253,18 @@ class OC_Aviv_Pos_Products_Importer {
 			$logger->info( sprintf( 'Updated product %d (barcode: %s) - price: %s, stock: %s', $product_id, $barcode, $price, $stock ), $ctx );
 		}
 
+		// Re-sync variable parents so their derived price / price-range reflects the
+		// updated variation prices (and clear stale price transients).
+		foreach ( array_keys( $parents_to_sync ) as $parent_id ) {
+			if ( class_exists( 'WC_Product_Variable' ) ) {
+				WC_Product_Variable::sync( $parent_id );
+			}
+			wc_delete_product_transients( $parent_id );
+		}
+
 		$elapsed_time = round( microtime( true ) - $start_time, 2 );
 
-		$logger->info( sprintf( 'Import completed: %d updated, %d not found, %d skipped in %ss', $results['updated'], $results['not_found'], $results['skipped'], $elapsed_time ), $ctx );
+		$logger->info( sprintf( 'Import completed: %d updated, %d unchanged, %d not found, %d skipped in %ss', $results['updated'], $results['unchanged'], $results['not_found'], $results['skipped'], $elapsed_time ), $ctx );
 
 		// Save import log
 		$log_data = [
@@ -206,10 +275,12 @@ class OC_Aviv_Pos_Products_Importer {
 			'elapsed_time'     => $elapsed_time,
 			'total_rows'       => count( $data ),
 			'updated'          => $results['updated'],
+			'unchanged'        => $results['unchanged'],
 			'not_found'        => $results['not_found'],
 			'skipped'          => $results['skipped'],
 			'updated_items'    => array_slice( $results['updated_items'], 0, 100 ),
 			'not_found_items'  => array_slice( $results['not_found_items'], 0, 50 ),
+			'skipped_items'    => array_slice( $results['skipped_items'], 0, 50 ),
 			'update_price'     => $update_price,
 			'update_stock'     => $update_stock,
 		];
@@ -217,6 +288,90 @@ class OC_Aviv_Pos_Products_Importer {
 		self::save_import_log( $log_data );
 
 		return $results;
+	}
+
+	/**
+	 * Resolve the concrete products whose price should be written for a matched barcode.
+	 *
+	 * - Simple product: prices itself.
+	 * - Variation: prices itself; its parent is returned for a post-import re-sync.
+	 * - Variable product: its shown price is derived from its variations, so we target the
+	 *   variations that actually carry the barcode. When none do, we only apply the single
+	 *   file price to every variation if they already share one identical regular price (a
+	 *   product priced as a whole in Aviv); otherwise the row is ambiguous and is skipped so
+	 *   we never flatten legitimately different variation prices.
+	 *
+	 * @param WC_Product $product   The matched product.
+	 * @param string     $barcode   The barcode (SKU) from the file.
+	 * @param int|null   $parent_id Out: parent id to re-sync after writing (null when none).
+	 * @param bool       $ambiguous Out: true when a variable product could not be resolved safely.
+	 * @return array List of WC_Product objects to write (empty = nothing safe to price).
+	 */
+	private static function resolve_price_targets( $product, string $barcode, &$parent_id, bool &$ambiguous ): array {
+		$parent_id = null;
+		$ambiguous = false;
+
+		if ( $product->is_type( 'variable' ) ) {
+			$parent_id = $product->get_id();
+			$matched   = [];
+			$all       = [];
+			foreach ( $product->get_children() as $child_id ) {
+				$variation = wc_get_product( $child_id );
+				if ( ! $variation ) {
+					continue;
+				}
+				$all[] = $variation;
+				if ( (string) $variation->get_sku() === (string) $barcode ) {
+					$matched[] = $variation;
+				}
+			}
+
+			// Prefer variations that actually carry the barcode.
+			if ( ! empty( $matched ) ) {
+				return $matched;
+			}
+
+			// No variation carries the barcode: only safe to price all of them when they
+			// already share one identical regular price. Otherwise skip (ambiguous).
+			if ( self::variations_share_one_price( $all ) ) {
+				return $all;
+			}
+
+			$ambiguous = true;
+			return [];
+		}
+
+		if ( $product->is_type( 'variation' ) ) {
+			$parent_id = $product->get_parent_id();
+			return [ $product ];
+		}
+
+		return [ $product ];
+	}
+
+	/**
+	 * Whether every variation carries the same non-empty regular price.
+	 *
+	 * @param array $variations List of WC_Product_Variation objects.
+	 * @return bool
+	 */
+	private static function variations_share_one_price( array $variations ): bool {
+		if ( count( $variations ) < 1 ) {
+			return false;
+		}
+		$seen = null;
+		foreach ( $variations as $variation ) {
+			$regular = (string) $variation->get_regular_price();
+			if ( '' === $regular ) {
+				return false;
+			}
+			if ( null === $seen ) {
+				$seen = $regular;
+			} elseif ( (float) $regular !== (float) $seen ) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	/**
