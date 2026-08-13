@@ -65,8 +65,6 @@ add_action( OC_AVIV_POS_CRON_HOOK, static function () {
 		return;
 	}
 
-    //להעיף
-	return;
 	$account_id   = $settings['account_id'] ?? '';
 	$update_price = ( $settings['products_import_update_price'] ?? 'yes' ) === 'yes';
 	$update_stock = ( $settings['products_import_update_stock'] ?? 'no' ) === 'yes';
