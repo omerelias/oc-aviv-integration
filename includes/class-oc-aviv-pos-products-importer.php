@@ -375,8 +375,12 @@ class OC_Aviv_Pos_Products_Importer {
 	}
 
 	/**
-	 * Parse CSV file with fixed column positions.
-	 * Format: barcode,price,stock,date
+	 * Parse the CSV file.
+	 *
+	 * Columns are resolved from the header row by name so Aviv can add columns
+	 * (e.g. product name, category) without breaking the price/stock update. When the
+	 * header is unrecognised we fall back to the historical fixed positions
+	 * (barcode, price, stock, last-sold-date), preserving the original behaviour.
 	 *
 	 * @param string $file_path Path to the file.
 	 * @return array|\WP_Error
@@ -389,13 +393,12 @@ class OC_Aviv_Pos_Products_Importer {
 			return new WP_Error( 'csv_open_error', __( 'Could not open CSV file.', 'oc-aviv-pos' ) );
 		}
 
-		// Skip the header row (it may have encoding issues, we use fixed positions)
-		fgets( $handle );
+		// Resolve which column holds what from the header row.
+		$header_line = fgets( $handle );
+		$columns     = self::map_header_columns( $header_line );
 
 		// Read data rows
-		$row_num = 0;
 		while ( ( $line = fgets( $handle ) ) !== false ) {
-			$row_num++;
 
 			// Try to convert from Windows-1255 to UTF-8 if needed
 			$line = self::convert_encoding( $line );
@@ -407,27 +410,114 @@ class OC_Aviv_Pos_Products_Importer {
 				continue;
 			}
 
-			$barcode = isset( $values[0] ) ? trim( (string) $values[0] ) : '';
-			$price   = isset( $values[1] ) ? self::parse_price( $values[1] ) : null;
-			$stock   = isset( $values[2] ) ? self::parse_stock( $values[2] ) : null;
-			$date    = isset( $values[3] ) ? trim( (string) $values[3] ) : '';
+			$barcode = self::column_value( $values, $columns, 'barcode' );
 
 			// Skip empty barcodes
-			if ( empty( $barcode ) ) {
+			if ( '' === $barcode ) {
 				continue;
 			}
 
 			$data[] = [
-				'barcode' => $barcode,
-				'price'   => $price,
-				'stock'   => $stock,
-				'date'    => $date,
+				'barcode'  => $barcode,
+				'price'    => self::parse_price( self::column_value( $values, $columns, 'price' ) ),
+				'stock'    => self::parse_stock( self::column_value( $values, $columns, 'stock' ) ),
+				'date'     => self::column_value( $values, $columns, 'date' ),
+				'name'     => self::column_value( $values, $columns, 'name' ),      // '' until Aviv adds the column
+				'category' => self::column_value( $values, $columns, 'category' ),  // '' until Aviv adds the column
 			];
 		}
 
 		fclose( $handle );
 
 		return $data;
+	}
+
+	/**
+	 * Map logical columns (barcode, price, stock, date, name, category) to positions,
+	 * resolved from the header row by name. Falls back to the historical fixed
+	 * positions when the header does not contain the essential columns.
+	 *
+	 * @param string|false $header_line Raw first line of the file.
+	 * @return array<string,int|null>
+	 */
+	private static function map_header_columns( $header_line ): array {
+		// Historical fixed positions — used as-is when the header is unrecognised.
+		$map = [ 'barcode' => 0, 'price' => 1, 'stock' => 2, 'date' => 3, 'name' => null, 'category' => null ];
+
+		if ( ! is_string( $header_line ) || '' === trim( $header_line ) ) {
+			return $map;
+		}
+
+		$header  = str_getcsv( self::convert_encoding( $header_line ) );
+		$aliases = [
+			'barcode'  => [ 'ברקוד', 'מקט', 'barcode', 'sku' ],
+			'price'    => [ 'מחיר', 'price' ],
+			'stock'    => [ 'קיים במלאי', 'מלאי', 'stock', 'quantity' ],
+			'date'     => [ 'פעם אחרונה נמכר', 'נמכר', 'last sold', 'lastsold' ],
+			'name'     => [ 'שם מוצר', 'שם', 'name', 'title', 'description' ],
+			'category' => [ 'קטגוריה', 'category', 'cat' ],
+		];
+
+		$resolved = [];
+		foreach ( $header as $idx => $label ) {
+			$norm = self::normalize_header( $label );
+			if ( '' === $norm ) {
+				continue;
+			}
+			foreach ( $aliases as $key => $variants ) {
+				if ( array_key_exists( $key, $resolved ) ) {
+					continue;
+				}
+				$matched = false;
+				foreach ( $variants as $variant ) {
+					$vnorm = self::normalize_header( $variant );
+					if ( '' !== $vnorm && mb_strpos( $norm, $vnorm ) !== false ) {
+						$resolved[ $key ] = $idx;
+						$matched          = true;
+						break;
+					}
+				}
+				if ( $matched ) {
+					break;
+				}
+			}
+		}
+
+		// Only trust the header when the essential columns were found in it; otherwise keep
+		// the fixed positions so a garbled/unexpected header can never mis-read price/stock.
+		if ( array_key_exists( 'barcode', $resolved ) && array_key_exists( 'price', $resolved ) ) {
+			$map = array_merge( $map, $resolved );
+		}
+
+		return $map;
+	}
+
+	/**
+	 * Normalise a header label for comparison (lower-case, stripped of quotes/dots/BOM).
+	 *
+	 * @param mixed $label Header cell.
+	 * @return string
+	 */
+	private static function normalize_header( $label ): string {
+		$label = str_replace( [ "\xEF\xBB\xBF", '"', "'", '`', '.' ], '', (string) $label );
+		$label = trim( $label );
+		return function_exists( 'mb_strtolower' ) ? mb_strtolower( $label ) : strtolower( $label );
+	}
+
+	/**
+	 * Read a logical column's trimmed value from a row using the resolved column map.
+	 *
+	 * @param array                  $values Row values.
+	 * @param array<string,int|null> $map    Logical column -> index.
+	 * @param string                 $key    Logical column name.
+	 * @return string Empty string when the column is absent.
+	 */
+	private static function column_value( array $values, array $map, string $key ): string {
+		$idx = $map[ $key ] ?? null;
+		if ( null === $idx || ! isset( $values[ $idx ] ) ) {
+			return '';
+		}
+		return trim( (string) $values[ $idx ] );
 	}
 
 	/**
