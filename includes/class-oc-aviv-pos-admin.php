@@ -161,6 +161,23 @@ class OC_Aviv_Pos_Admin {
 					<p class="description"><?php esc_html_e( 'ההזמנה תישלח ל-Aviv POS כשהיא נעה לאחד מהסטטוסים שנבחרו.', 'oc-aviv-pos' ); ?></p>
 				</td>
 			</tr>
+			<tr>
+				<th scope="row"><label for="same_sku_enabled"><?php esc_html_e( 'האם לשלוח מקט זהה?', 'oc-aviv-pos' ); ?></label></th>
+				<td>
+					<label>
+						<input type="checkbox" name="settings[same_sku_enabled]" id="same_sku_enabled" value="yes" <?php checked( $settings['same_sku_enabled'] ?? 'no', 'yes' ); ?> />
+						<?php esc_html_e( 'שלח מקט זהה לכל הפריטים', 'oc-aviv-pos' ); ?>
+					</label>
+					<p class="description"><?php esc_html_e( 'משמש בדרך כלל לסכימת הזמנות דרך האתר בממשק של אביב.', 'oc-aviv-pos' ); ?></p>
+				</td>
+			</tr>
+			<tr class="oc-aviv-same-sku-value-row" <?php echo ( $settings['same_sku_enabled'] ?? 'no' ) === 'yes' ? '' : 'style="display:none;"'; ?>>
+				<th scope="row"><label for="same_sku_value"><?php esc_html_e( 'מקט לשליחה', 'oc-aviv-pos' ); ?></label></th>
+				<td>
+					<input name="settings[same_sku_value]" id="same_sku_value" type="text" class="regular-text" value="<?php echo esc_attr( $settings['same_sku_value'] ?? '' ); ?>" />
+					<p class="description"><?php esc_html_e( 'מקט זה יישלח בשדה ה-id של כל פריט בהזמנה, במקום המקט של המוצר.', 'oc-aviv-pos' ); ?></p>
+				</td>
+			</tr>
 		</table>
 		<?php
 	}
@@ -339,6 +356,13 @@ class OC_Aviv_Pos_Admin {
 		if ( array_key_exists( 'trigger_statuses', $data ) ) {
 			$sanitized['trigger_statuses'] = array_values( array_filter( array_map( 'sanitize_text_field', $data['trigger_statuses'] ?? [] ) ) );
 		}
+		// "Send same SKU" checkbox + value live on the API tab; only persist when that tab is submitted.
+		if ( array_key_exists( 'vendor_id', $data ) ) {
+			$sanitized['same_sku_enabled'] = ! empty( $data['same_sku_enabled'] ) ? 'yes' : 'no';
+		}
+		if ( array_key_exists( 'same_sku_value', $data ) ) {
+			$sanitized['same_sku_value'] = sanitize_text_field( $data['same_sku_value'] );
+		}
 
 		// Comment/Mappings tab fields.
 		if ( array_key_exists( 'comment_mode', $data ) ) {
@@ -448,6 +472,8 @@ class OC_Aviv_Pos_Admin {
 			'base_url'           => 'http://test.aviv-pos.co.il/api/avivrd',
 			'webhook_url'        => '',
 			'trigger_statuses'   => [],
+			'same_sku_enabled'   => 'no',
+			'same_sku_value'     => '',
 			'comment_mode'       => 'variations_and_note',
 			'general_separator'  => ' | ',
 			'variation_separator'=> ': ',

@@ -32,6 +32,14 @@
 			});
 		}
 
+		// Toggle "מקט לשליחה" field based on "send same SKU" checkbox.
+		var $sameSkuCheckbox = $('#same_sku_enabled');
+		if($sameSkuCheckbox.length){
+			$sameSkuCheckbox.on('change', function(){
+				$('.oc-aviv-same-sku-value-row').toggle(this.checked);
+			});
+		}
+
 		// Debug tool
 		$('#oc_aviv_show_payload, #oc_aviv_show_request').on('click', function(e){
 			e.preventDefault();

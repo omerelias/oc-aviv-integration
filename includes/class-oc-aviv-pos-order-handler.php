@@ -28,20 +28,22 @@ class OC_Aviv_Pos_Order_Handler {
 		}
 
 		$selected_statuses = $settings['trigger_statuses'] ?? [];
-		$status_key        = 'wc-' . ltrim( $new_status, 'wc-' );
+		$status_key        = 'wc-' . preg_replace( '/^wc-/', '', $new_status );
 
 		if ( empty( $selected_statuses ) || ! in_array( $status_key, $selected_statuses, true ) ) {
 			return;
 		}
 
 		$payload = self::build_payload( $order, $settings );
-		$result  = OC_Aviv_Pos_API::send_order( $payload, $settings['vendor_id'], $settings['account_id'] );
 
 		$logger = wc_get_logger();
 		$ctx    = [ 'source' => 'oc-aviv-pos', 'order_id' => $order->get_id() ];
+		$logger->info( 'Sending order payload to Aviv POS: ' . wp_json_encode( $payload, JSON_UNESCAPED_UNICODE ), $ctx );
+
+		$result  = OC_Aviv_Pos_API::send_order( $payload, $settings['vendor_id'], $settings['account_id'] );
 
 		if ( is_wp_error( $result ) ) {
-			$logger->error( 'Failed sending order to Aviv POS: ' . $result->get_error_message(), $ctx );
+			$logger->error( 'Failed sending order to Aviv POS: ' . $result->get_error_message() . ' | response: ' . wp_json_encode( $result->get_error_data(), JSON_UNESCAPED_UNICODE ), $ctx );
 		} elseif ( is_array( $result ) && ! empty( $result['already_exists'] ) ) {
 			// Order already exists - this is actually a success case
 			$logger->info( 'Order already exists in Aviv POS: ' . ( $result['message'] ?? '' ), $ctx );
@@ -50,7 +52,7 @@ class OC_Aviv_Pos_Order_Handler {
 			$order->add_order_note( __( 'ההזמנה כבר קיימת ב-Aviv POS.', 'oc-aviv-pos' ) );
 			$order->save();
 		} else {
-			$logger->info( 'Order sent to Aviv POS successfully', $ctx );
+			$logger->info( 'Order sent to Aviv POS successfully. Response: ' . wp_json_encode( $result, JSON_UNESCAPED_UNICODE ), $ctx );
 			$order->update_meta_data( '_oc_aviv_pos_sent', 'yes' );
 			$order->update_meta_data( '_oc_aviv_pos_sent_at', current_time( 'mysql' ) );
 			$order->add_order_note( __( 'נשלחה הזמנה ל-Aviv POS.', 'oc-aviv-pos' ) );
@@ -61,9 +63,17 @@ class OC_Aviv_Pos_Order_Handler {
 	public static function build_payload( WC_Order $order, array $settings ): array {
 		$items = [];
 
+		// When "send same SKU" is enabled, every item is sent with the same configured SKU.
+		$same_sku_enabled = ( $settings['same_sku_enabled'] ?? 'no' ) === 'yes';
+		$same_sku_value   = trim( (string) ( $settings['same_sku_value'] ?? '' ) );
+
 		foreach ( $order->get_items() as $item ) {
 			$product = $item->get_product();
 			$id      = $product ? ( $product->get_sku() ?: (string) $product->get_id() ) : (string) $item->get_product_id();
+
+			if ( $same_sku_enabled && $same_sku_value !== '' ) {
+				$id = $same_sku_value;
+			}
 
 			// Extract cutting-shape variation and append to desc.
 			$cutting_shape = self::get_cutting_shape_variation( $item );
